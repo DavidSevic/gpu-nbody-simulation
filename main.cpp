@@ -5,30 +5,30 @@
 #include <array>
 #include <fstream>
 
-const double g = 6.67 * pow(10, -11) * 1e9;
+const double g = 6.67 * pow(10, -11);// * 1e9;
 
 int main() {
     // parameters
-    const int n = 2;
-    const int n_dim = 2;
+    const int n = 3;
+    const int n_dim = 3;
 
     // mass
 
-    std::array<double, n> masses = {10.0, 10000.0};
+    std::array<double, n> masses = {1e-6, 1e-6, 1e6};
 
     double lower_m = 10.0;
     double higher_m = 10.0;
 
     // position
 
-    std::array<std::array<double, n_dim>, n> position_vectors = {{{0.0, 0.0}, {-100.0, 0.0}}};
+    std::array<std::array<double, n_dim>, n> position_vectors = {{{0.0, 0.0, 0.0}, {0.0, 0.2, 0.0}, {0.0, 1.0, 0.0}}};
 
     double lower_p = -10.0;
     double higher_p = 10.0;
 
     // velocity
 
-    std::array<std::array<double, n_dim>, n> velocity_vectors = {{{0.0, 0.0}, {0.0, 10.0}}};
+    std::array<std::array<double, n_dim>, n> velocity_vectors = {{{1e-2, 0.0, 1e-4}, {1e-2, 0.0, -1e-4}, {0.0, 0.0, 0.0}}};
 
     double lower_v = -5;
     double higher_v = 5;
@@ -61,8 +61,8 @@ int main() {
     }
 
     double absolute_t = 0;
-    const double delta_t = 0.1;
-    int n_simulations = 100;
+    const double delta_t = 10.0;
+    int n_simulations = 1000;
 
     std::cout<<"#################### SIMULATION STARTED ####################"<<std::endl<<std::endl;
 
@@ -114,6 +114,10 @@ int main() {
                     euclid_distance += (position_vectors[j][k] - position_vectors[i][k]) * (position_vectors[j][k] - position_vectors[i][k]);
                     displacement[k] = position_vectors[j][k] - position_vectors[i][k];
                 }
+                // debugging
+                if(i == 0)
+                    std::cout<<"deplacement: ["<<displacement[0]<<" , "<<displacement[1]<<" ]"<<std::endl;
+                //
                 euclid_distance = sqrt(euclid_distance);
                 for(int k = 0; k < n_dim; ++k) {
                     sum[k] += (masses[i] * masses[j] * displacement[k]) / (euclid_distance * euclid_distance * euclid_distance);
@@ -148,6 +152,14 @@ int main() {
             for(int k = 0; k < n_dim; ++k)
                 position_vectors[i][k] = position_vectors[i][k] + velocity_vectors[i][k] * delta_t;
         }
+
+        // debugging
+        //position_vectors[1][0] = 1.0;
+        //position_vectors[1][1] = 1.0;
+        std::cout<<"force: ["<<force_vectors[0][0]<<" , "<<force_vectors[0][1]<<" ]"<<std::endl;
+        std::cout<<"acceleration: ["<<acceleration_vectors[0][0]<<" , "<<acceleration_vectors[0][1]<<" ]"<<std::endl;
+        std::cout<<"velocity: ["<<velocity_vectors[0][0]<<" , "<<velocity_vectors[0][1]<<" ]"<<std::endl;
+        //
 
         // Print positions at current time step
         std::cout<<"positions at t="<<absolute_t<<":"<<std::endl<<std::endl;
