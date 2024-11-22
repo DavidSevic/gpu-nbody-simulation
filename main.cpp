@@ -4,156 +4,173 @@
 #include <ctime>
 #include <array>
 #include <fstream>
+#include <chrono>
 
+// parameters
 const double g = 6.67e-11;
+const int n = 50;
+const int n_dim = 2;
+const double delta_t = 1.0;
+const int n_simulations = 100;
+const double lower_m = 1e-6;
+const double higher_m = 1e6;
+const double lower_p = -1e-1;
+const double higher_p = 1e-1;
+const double lower_v = -1e-4;
+const double higher_v = 1e-4;
+
+// structures
+using Vector = std::array<double, n_dim>;
+using Positions = std::array<Vector, n>;
+using Velocities = std::array<Vector, n>;
+using Forces = std::array<Vector, n>;
+using Masses = std::array<double, n>;
+using Accelerations = std::array<Vector, n>;
+
+double generateRandom(double lower, double upper) {
+    return lower + static_cast<double>(std::rand()) / RAND_MAX * (upper - lower);
+}
+
+double generateLogRandom(double lower, double upper) {
+    return std::pow(10, std::log10(lower) + static_cast<double>(std::rand()) / RAND_MAX * (std::log10(upper) - std::log10(lower)));
+}
+
+void initializeMasses(Masses& masses, double lower_m, double higher_m) {
+    for (double& mass : masses) {
+        mass = generateLogRandom(lower_m, higher_m);
+    }
+}
+
+void initializeVectors(Positions& vectors, double lower, double upper) {
+    for (auto& vector : vectors) {
+        for (double& component : vector) {
+            component = generateRandom(lower, upper);
+        }
+    }
+}
+
+void computeForces(const Positions& positions, const Masses& masses, Forces& forces) {
+    for (int i = 0; i < n; ++i) {
+        Vector sum = {};
+        for (int j = 0; j < n; ++j) {
+            if (i == j) continue;
+
+            double distance_squared = 0.0;
+            Vector displacement = {};
+            for (int k = 0; k < n_dim; ++k) {
+                displacement[k] = positions[j][k] - positions[i][k];
+                distance_squared += displacement[k] * displacement[k];
+            }
+
+            double distance = std::sqrt(distance_squared);
+            double factor = g * masses[i] * masses[j] / (distance_squared * distance);
+
+            for (int k = 0; k < n_dim; ++k) {
+                sum[k] += factor * displacement[k];
+            }
+        }
+        forces[i] = sum;
+    }
+}
+
+void updateAccelerations(const Forces& forces, const Masses& masses, Positions& accelerations) {
+    for (int i = 0; i < n; ++i) {
+        for (int k = 0; k < n_dim; ++k) {
+            accelerations[i][k] = forces[i][k] / masses[i];
+        }
+    }
+}
+
+void updateVelocities(Velocities& velocities, const Positions& accelerations, double delta_t) {
+    for (int i = 0; i < n; ++i) {
+        for (int k = 0; k < n_dim; ++k) {
+            velocities[i][k] += accelerations[i][k] * delta_t;
+        }
+    }
+}
+
+void updatePositions(Positions& positions, const Velocities& velocities, double delta_t) {
+    for (int i = 0; i < n; ++i) {
+        for (int k = 0; k < n_dim; ++k) {
+            positions[i][k] += velocities[i][k] * delta_t;
+        }
+    }
+}
+
+void printBodies(const Masses& masses, const Positions& positions, const Velocities& velocities) {
+    for (int i = 0; i < n; ++i) {
+        std::cout << "Body " << i << ":\n";
+        std::cout << "  Mass: " << masses[i] << "\n";
+        std::cout << "  Position: [ ";
+        for (const double& pos : positions[i]) {
+            std::cout << pos << ' ';
+        }
+        std::cout << "]\n";
+        std::cout << "  Velocity: [ ";
+        for (const double& vel : velocities[i]) {
+            std::cout << vel << ' ';
+        }
+        std::cout << "]\n";
+    }
+}
+
+void savePositions(std::string& output_str, const Positions& positions, double time) {
+    for (int i = 0; i < n; ++i) {
+        output_str += std::to_string(time) + " " + std::to_string(i) + " ";
+        for (const double& pos : positions[i]) {
+            output_str += std::to_string(pos) + " ";
+        }
+        output_str += "\n";
+    }
+}
+
+void runSimulation(Masses& masses, Positions& positions, Velocities& velocities) {
+    Accelerations accelerations = {};
+    Forces forces = {};
+
+    std::ofstream positions_file("positions.txt");
+    std::string output_str;
+
+    double absolute_t = 0.0;
+    savePositions(output_str, positions, absolute_t);
+    printBodies(masses, positions, velocities);
+
+    for (int step = 0; step < n_simulations; ++step) {
+        absolute_t += delta_t;
+
+        computeForces(positions, masses, forces);
+        updateAccelerations(forces, masses, accelerations);
+        updateVelocities(velocities, accelerations, delta_t);
+        updatePositions(positions, velocities, delta_t);
+
+        savePositions(output_str, positions, absolute_t);
+    }
+
+    positions_file << output_str;
+    positions_file.close();
+}
 
 int main() {
-    // parameters
-    const int n = 10;
-    const int n_dim = 3;
-    const double delta_t = 1.0;
-    int n_simulations = 100;
+    std::srand(static_cast<unsigned>(std::time(0)));
 
-    // mass
+    // structures
+    Masses masses;
+    Positions positions;
+    Velocities velocities;
 
-    std::array<double, n> masses;
+    // initialization
+    initializeMasses(masses, lower_m, higher_m);
+    initializeVectors(positions, lower_p, higher_p);
+    initializeVectors(velocities, lower_v, higher_v);
 
-    const double lower_m = 1e-6;
-    const double higher_m = 1e6;
+    // simulation run
+    auto start = std::chrono::high_resolution_clock::now();
 
-    // position
-
-    std::array<std::array<double, n_dim>, n> position_vectors;
-
-    const double lower_p = -1e-1;
-    const double higher_p = 1e-1;
-
-    // velocity
-
-    std::array<std::array<double, n_dim>, n> velocity_vectors;
-
-    const double lower_v = -1e-4;
-    const double higher_v = 1e-4;
+    runSimulation(masses, positions, velocities);
     
-    std::srand(std::time(nullptr));
-    for(int i = 0; i < n; ++i) {
-        masses[i] = std::pow(10, std::log10(lower_m) + static_cast<double>(std::rand()) / RAND_MAX * (std::log10(higher_m) - std::log10(lower_m)));
-        for(int j = 0; j < n_dim; ++j) {
-            position_vectors[i][j] = lower_p + static_cast<double>(std::rand()) / RAND_MAX * (higher_p - lower_p);
-            velocity_vectors[i][j] = lower_v + static_cast<double>(std::rand()) / RAND_MAX * (higher_v - lower_v);
-        }
-    }
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    std::cout << "Computation took " << duration.count() << " milliseconds." << std::endl;
 
-    std::cout<<std::endl<<"#################### BODIES PROPERTIES ####################"<<std::endl<<std::endl;
-    
-    for(int i = 0; i < n; ++i) {
-        std::cout<<"body "<<i<<":"<<std::endl;
-        std::cout<<"mass: "<<masses[i]<<std::endl;
-        std::cout<<"initial position: [ ";
-        for(double& pos : position_vectors[i]) {
-            std::cout<<pos<<' ';
-        }
-        std::cout<<']'<<std::endl;
-        std::cout<<"initial velocity: [ ";
-        for(double& vel : velocity_vectors[i]) {
-            std::cout<<vel<<' ';
-        }
-        std::cout<<']'<<std::endl<<std::endl;
-    }
-
-    double absolute_t = 0;
-
-    std::cout<<"#################### SIMULATION STARTED ####################"<<std::endl<<std::endl;
-
-    // saving positions for plotting
-    std::ofstream positions_file("positions.txt");
-
-    std::cout<<"positions at t="<<absolute_t<<":"<<std::endl<<std::endl;
-
-    for (int i = 0; i < n; ++i) {
-        std::cout << "[  ";
-        positions_file << absolute_t << " " << i << " ";
-        for (int k = 0; k < n_dim; ++k) {
-            positions_file << position_vectors[i][k] << " ";
-        }
-        positions_file << "\n";
-        std::cout << "]" << std::endl;
-    }
-
-    std::cout<<std::endl;
-
-    while(n_simulations--) {
-
-        absolute_t += delta_t;
-        
-        // forces
-    
-        std::array<std::array<double, n_dim>, n> force_vectors;
-
-        for(int i = 0; i < n; ++i) {
-            // calculating the sum
-            std::array<double, n_dim> sum = {};
-            for(int j = 0; j < n; ++j) {
-                if(j == i)
-                    continue;
-                else if()
-                // calculating the euclidian distance and displacement
-                double euclid_distance = 0;
-                std::array<double, n_dim> displacement;
-                for(int k = 0; k < n_dim; ++k) {
-                    euclid_distance += (position_vectors[j][k] - position_vectors[i][k]) * (position_vectors[j][k] - position_vectors[i][k]);
-                    displacement[k] = position_vectors[j][k] - position_vectors[i][k];
-                }
-                euclid_distance = sqrt(euclid_distance);
-                for(int k = 0; k < n_dim; ++k) {
-                    sum[k] += (masses[i] * masses[j] * displacement[k]) / (euclid_distance * euclid_distance * euclid_distance);
-                }
-            }
-            for(int k = 0; k < n_dim; ++k) {
-                force_vectors[i][k] = g * sum[k];
-            }
-        }
-
-        // accelerations
-
-        std::array<std::array<double, n_dim>, n> acceleration_vectors;
-
-        for(int i = 0; i < n; ++i) {
-            for(int k = 0; k < n_dim; ++k) {
-                acceleration_vectors[i][k] = force_vectors[i][k] / masses[i];
-            }
-        }
-
-        // velocities
-
-        for(int i = 0; i < n; ++i) {
-            for(int k = 0; k < n_dim; ++k)
-                velocity_vectors[i][k] = velocity_vectors[i][k] + acceleration_vectors[i][k] * delta_t;
-        }
-
-        // new positions
-
-        for(int i = 0; i < n; ++i) {
-            for(int k = 0; k < n_dim; ++k)
-                position_vectors[i][k] = position_vectors[i][k] + velocity_vectors[i][k] * delta_t;
-        }
-
-        // Print positions at current time step
-
-        std::cout<<"positions at t="<<absolute_t<<":"<<std::endl<<std::endl;
-        for (int i = 0; i < n; ++i) {
-            std::cout << "[  ";
-            positions_file << absolute_t << " " << i << " ";
-            for (int k = 0; k < n_dim; ++k) {
-                std::cout << position_vectors[i][k] << ' ';
-                positions_file << position_vectors[i][k] << " ";
-            }
-            positions_file << "\n";
-            std::cout << "]" << std::endl;
-        }
-        std::cout << std::endl;
-    }
-    for(int i = 0; i < n; ++i)
-        std::cout<<"mass["<<i<<"]: "<<masses[i]<<std::endl;
-    positions_file.close();
+    return 0;
 }
