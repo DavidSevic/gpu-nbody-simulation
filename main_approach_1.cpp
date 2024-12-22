@@ -5,10 +5,11 @@
 #include <array>
 #include <fstream>
 #include <chrono>
+#include <string>
 
 // parameters
 const double g = 6.67e-11;
-const int n = 50;
+const int n = 2;
 const int n_dim = 2;
 const double delta_t = 1.0;
 const int n_simulations = 100;
