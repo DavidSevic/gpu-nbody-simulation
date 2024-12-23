@@ -10,25 +10,25 @@
 #include <stack>
 
 // parameters
-const double g = 6.67e-11;
-const int n = 1000;
-const int n_dim = 2;
-const double delta_t = 1.0;
-const int n_simulations = 100;
-const double lower_m = 1e-6;
-const double higher_m = 1e6;
-const double lower_p = -1e-1;
-const double higher_p = 1e-1;
-const double lower_v = -1e-4;
-const double higher_v = 1e-4;
+const double G = 6.67e-11;
+const int N_BODIES = 1000;
+const int N_DIM = 2;
+const double DELTA_T = 1.0;
+const int N_SIMULATIONS = 100;
+const double LOWER_M = 1e-6;
+const double HIGHER_M = 1e6;
+const double LOWER_P = -1e-1;
+const double HIGHER_P = 1e-1;
+const double LOWER_V = -1e-4;
+const double HIGHER_v = 1e-4;
 
 // structures
-using Vector = std::array<double, n_dim>;
-using Positions = std::array<Vector, n>;
-using Velocities = std::array<Vector, n>;
-using Forces = std::array<Vector, n>;
-using Masses = std::array<double, n>;
-using Accelerations = std::array<Vector, n>;
+using Vector = std::array<double, N_DIM>;
+using Positions = std::array<Vector, N_BODIES>;
+using Velocities = std::array<Vector, N_BODIES>;
+using Forces = std::array<Vector, N_BODIES>;
+using Masses = std::array<double, N_BODIES>;
+using Accelerations = std::array<Vector, N_BODIES>;
 using Quadrant = std::array<double, 12>;
 
 // Constants for indexing the Quadrant array
@@ -46,7 +46,7 @@ constexpr int Y_MAX = 10;
 constexpr int PARTICLE_INDEX = 11;
 
 std::vector<Quadrant> quadtree;
-const double theta = 5e-1;
+const double THETA = 5e-1;
 
 double generateRandom(double lower, double upper) {
     return lower + static_cast<double>(std::rand()) / RAND_MAX * (upper - lower);
@@ -56,9 +56,9 @@ double generateLogRandom(double lower, double upper) {
     return std::pow(10, std::log10(lower) + static_cast<double>(std::rand()) / RAND_MAX * (std::log10(upper) - std::log10(lower)));
 }
 
-void initializeMasses(Masses& masses, double lower_m, double higher_m) {
+void initializeMasses(Masses& masses, double LOWER_M, double HIGHER_M) {
     for (double& mass : masses) {
-        mass = generateLogRandom(lower_m, higher_m);
+        mass = generateLogRandom(LOWER_M, HIGHER_M);
     }
 }
 
@@ -82,15 +82,10 @@ int DetermineChild(const Vector& pos, const Quadrant& node) {
     if (pos[0] <  mid_x && pos[1] <  mid_y)  return 0; // Bottom-left
     if (pos[0] >= mid_x && pos[1] <  mid_y)  return 1; // Bottom-right
     if (pos[0] <  mid_x && pos[1] >= mid_y)  return 2; // Top-left
-    return 3;                                    // Top-right
+    return 3;                                          // Top-right
 }
 
 void QuadInsert(int particle_index, int node_index, const Positions& positions, const Masses& masses) {
-    /*std::cout << "QuadInsert: p=" << particle_index
-          << " pos[0]=" << positions[particle_index][0]
-          << " pos[1]=" << positions[particle_index][1]
-          << " node=" << node_index
-          << " quadtree.size()=" << quadtree.size() << std::endl;*/
 
     Quadrant node = quadtree[node_index];
     const Vector& pos = positions[particle_index];
@@ -124,15 +119,7 @@ void QuadInsert(int particle_index, int node_index, const Positions& positions, 
             } else {
                 child = {-1, -1, -1, -1, 0.0, 0.0, 0.0, mid_x, node[X_MAX], mid_y, node[Y_MAX], -1};
             }
-            /*std::cout<<"processing child: "<<i<<std::endl;
-            std::cout<<"node[X_MIN]: "<<node[X_MIN]<<std::endl;
-            std::cout<<"hej"<<std::endl;
-            std::cout<<"node[X_MAX]: "<<node[X_MAX]<<std::endl;
-            std::cout<<"node[Y_MIN]: "<<node[Y_MIN]<<std::endl;
-            std::cout<<"node[Y_MAX]: "<<node[Y_MAX]<<std::endl;
-            std::cout<<"mid_x: "<<mid_x<<std::endl;
-            std::cout<<"mid_y: "<<mid_y<<std::endl;
-            */
+
             int child_index = quadtree.size();
 
             quadtree.push_back(child);
@@ -192,13 +179,11 @@ void TraverseTreeToFile(int node_index, std::ofstream& file,
 
     const Quadrant& node = quadtree[node_index];
 
-    // Always print bounding box & total mass:
     file << depth << " "
          << node[X_MIN] << " " << node[X_MAX] << " "
          << node[Y_MIN] << " " << node[Y_MAX] << " "
          << node[TOTAL_MASS];
 
-    // If this node has an actual occupant
     int occupantIdx = static_cast<int>(node[PARTICLE_INDEX]);
     if (occupantIdx != -1) {
         file << " occupantIndex=" << occupantIdx
@@ -208,7 +193,6 @@ void TraverseTreeToFile(int node_index, std::ofstream& file,
 
     file << "\n";
 
-    // Recurse into children
     for (int i = 0; i < 4; ++i) {
         int childIdx = static_cast<int>(node[CHILDREN_0 + i]);
         if (childIdx != -1) {
@@ -224,8 +208,8 @@ std::array<double, 4> ComputeRootBounds(const Positions& positions)
     double yMin =  std::numeric_limits<double>::infinity();
     double yMax = -std::numeric_limits<double>::infinity();
 
-    // 1) Find actual min/max among all bodies
-    for (int i = 0; i < n; ++i) {
+    // Find actual min/max among all bodies
+    for (int i = 0; i < N_BODIES; ++i) {
         double x = positions[i][0];
         double y = positions[i][1];
         xMin = std::min(xMin, x);
@@ -234,12 +218,11 @@ std::array<double, 4> ComputeRootBounds(const Positions& positions)
         yMax = std::max(yMax, y);
     }
 
-    // 2) Optionally pad the bounding box
+    // pad the bounding box
     double dx = xMax - xMin;
     double dy = yMax - yMin;
     double maxDim = std::max(dx, dy);
 
-    // Tune this fraction as you see fit (e.g., 0.1 => 10% padding)
     double padFraction = 0.1;
     double pad = padFraction * maxDim;
 
@@ -266,11 +249,9 @@ std::vector<Quadrant> buildTree(const Positions& positions, const Masses& masses
     double yMin = rootBounds[2];
     double yMax = rootBounds[3];
 
-    // 2) Initialize root
     InitializeRoot(xMin, xMax, yMin, yMax);
 
-    for (int i = 0; i < n; ++i) {
-        //std::cout<<"inserting body: "<<i<<std::endl;
+    for (int i = 0; i < N_BODIES; ++i) {
         QuadInsert(i, 0, positions, masses);
     }
     ComputeMass(0);
@@ -281,21 +262,14 @@ void computeForces(const Positions& positions,
                    const Masses& masses,
                    Forces& forces)
 {
-    // Zero out old forces
-    /*for (int i = 0; i < n; ++i) {
-        forces[i] = {0.0, 0.0};
-    }*/
-
     // For each body, traverse the quadtree
-    for (int i = 0; i < n; ++i)
+    for (int i = 0; i < N_BODIES; ++i)
     {
-        // We'll accumulate force in sum
         Vector sum = {0.0, 0.0};
 
-        // We need the body i's position
         Vector pos_i = positions[i];
 
-        // Use a stack of node indices
+        // use a stack of node indices
         std::stack<int> nodeStack;
         nodeStack.push(0); // root is index 0
 
@@ -306,47 +280,45 @@ void computeForces(const Positions& positions,
 
             const Quadrant& node = quadtree[nodeIndex];
 
-            // If this node has zero mass, skip
+            // if this node has zero mass, skip
             double nodeMass = node[TOTAL_MASS];
             if (nodeMass <= 1e-15) {
                 continue;
             }
 
-            // If this node is a leaf with a single occupant
+            // if this node is a leaf with a single occupant
             int occupantIdx = static_cast<int>(node[PARTICLE_INDEX]);
             bool isLeaf = (node[CHILDREN_0] == -1 && 
                            node[CHILDREN_1] == -1 &&
                            node[CHILDREN_2] == -1 &&
                            node[CHILDREN_3] == -1);
 
-            // Compute displacement from body i to this node's center of mass
+            // compute displacement from body i to this node's center of mass
             Vector displacement;
             displacement[0] = node[CENTER_OF_MASS_X] - pos_i[0];
             displacement[1] = node[CENTER_OF_MASS_Y] - pos_i[1];
 
             double distance_sq = displacement[0]*displacement[0] + displacement[1]*displacement[1];
-            double distance    = std::sqrt(distance_sq) + 1e-15; // small offset to avoid div-by-zero
+            double distance    = std::sqrt(distance_sq) + 1e-15; // small offset to avoid division by zero
 
-            // Approximate node size
+            // approximate node size
             double dx = node[X_MAX] - node[X_MIN];
             double dy = node[Y_MAX] - node[Y_MIN];
             double node_size = (dx > dy) ? dx : dy;  // max dimension in 2D
 
-            // Barnes-Hut criterion: if node is leaf OR size/distance < theta
+            // Barnes-Hut criterion: if node is leaf OR size/distance < THETA
             // => approximate entire subtree as one body
-            //std::cout<<"node_size / distance = "<<node_size / distance<<std::endl;
-            if (isLeaf || (node_size / distance < theta)) 
+            if (isLeaf || (node_size / distance < THETA)) 
             {
-                // If it's a leaf for occupant i, skip self-interaction
+                // if it's a leaf for occupant i, skip self-interaction
                 if (isLeaf && occupantIdx == i) {
                     continue;
                 }
 
-                // Accumulate approximate force
-                // Force magnitude = G * m_i * nodeMass / r^2
-                double force_mag = (g * masses[i] * nodeMass) / (distance_sq);
+                // accumulate approximate force
+                double force_mag = (G * masses[i] * nodeMass) / (distance_sq);
 
-                // Normalized direction
+                // normalized direction
                 double nx = displacement[0] / distance;
                 double ny = displacement[1] / distance;
 
@@ -355,7 +327,6 @@ void computeForces(const Positions& positions,
             }
             else
             {
-                // Not a leaf, and too close => descend into children
                 for (int c = 0; c < 4; ++c)
                 {
                     int childIdx = static_cast<int>(node[CHILDREN_0 + c]);
@@ -366,37 +337,37 @@ void computeForces(const Positions& positions,
             }
         } // end while stack
 
-        // Store final force for body i
+        // store final force for body i
         forces[i] = sum;
     } // end for each body
 }
 
 void updateAccelerations(const Forces& forces, const Masses& masses, Positions& accelerations) {
-    for (int i = 0; i < n; ++i) {
-        for (int k = 0; k < n_dim; ++k) {
+    for (int i = 0; i < N_BODIES; ++i) {
+        for (int k = 0; k < N_DIM; ++k) {
             accelerations[i][k] = forces[i][k] / masses[i];
         }
     }
 }
 
-void updateVelocities(Velocities& velocities, const Positions& accelerations, double delta_t) {
-    for (int i = 0; i < n; ++i) {
-        for (int k = 0; k < n_dim; ++k) {
-            velocities[i][k] += accelerations[i][k] * delta_t;
+void updateVelocities(Velocities& velocities, const Positions& accelerations, double DELTA_T) {
+    for (int i = 0; i < N_BODIES; ++i) {
+        for (int k = 0; k < N_DIM; ++k) {
+            velocities[i][k] += accelerations[i][k] * DELTA_T;
         }
     }
 }
 
-void updatePositions(Positions& positions, const Velocities& velocities, double delta_t) {
-    for (int i = 0; i < n; ++i) {
-        for (int k = 0; k < n_dim; ++k) {
-            positions[i][k] += velocities[i][k] * delta_t;
+void updatePositions(Positions& positions, const Velocities& velocities, double DELTA_T) {
+    for (int i = 0; i < N_BODIES; ++i) {
+        for (int k = 0; k < N_DIM; ++k) {
+            positions[i][k] += velocities[i][k] * DELTA_T;
         }
     }
 }
 
 void printBodies(const Masses& masses, const Positions& positions, const Velocities& velocities) {
-    for (int i = 0; i < n; ++i) {
+    for (int i = 0; i < N_BODIES; ++i) {
         std::cout << "Body " << i << ":\n";
         std::cout << "  Mass: " << masses[i] << "\n";
         std::cout << "  Position: [ ";
@@ -413,7 +384,7 @@ void printBodies(const Masses& masses, const Positions& positions, const Velocit
 }
 
 void savePositions(std::string& output_str, const Positions& positions, double time) {
-    for (int i = 0; i < n; ++i) {
+    for (int i = 0; i < N_BODIES; ++i) {
         output_str += std::to_string(time) + " " + std::to_string(i) + " ";
         for (const double& pos : positions[i]) {
             output_str += std::to_string(pos) + " ";
@@ -434,28 +405,27 @@ void runSimulation(Masses& masses, Positions& positions, Velocities& velocities)
     double absolute_t = 0.0;
 
     savePositions(output_str, positions, absolute_t);
-    printBodies(masses, positions, velocities);
+    //printBodies(masses, positions, velocities);
     
-    for (int step = 0; step < n_simulations; ++step) {
-        absolute_t += delta_t;
-        std::cout<<"step: "<<step<<std::endl;
-        // Build the quadtree for this simulation step
+    for (int step = 0; step < N_SIMULATIONS; ++step) {
+        absolute_t += DELTA_T;
+
+        // create the quadtree
         quadtree = buildTree(positions, masses);
-        //std::vector<Quadrant>& quadtree_copy = quadtree;
         
         // Write the quadtree to a file for visualization
         if (step == 0)
             TraverseTreeToFile(0, tree_file_init, positions);
-        else if (step == n_simulations - 1)
+        else if (step == N_SIMULATIONS - 1)
             TraverseTreeToFile(0, tree_file_final, positions);
         
         computeForces(positions, masses, forces);
         
         updateAccelerations(forces, masses, accelerations);
         
-        updateVelocities(velocities, accelerations, delta_t);
+        updateVelocities(velocities, accelerations, DELTA_T);
         
-        updatePositions(positions, velocities, delta_t);
+        updatePositions(positions, velocities, DELTA_T);
         
         
         savePositions(output_str, positions, absolute_t);
@@ -480,9 +450,9 @@ int main() {
 
 
     // initialization
-    initializeMasses(masses, lower_m, higher_m);
-    initializeVectors(positions, lower_p, higher_p);
-    initializeVectors(velocities, lower_v, higher_v);
+    initializeMasses(masses, LOWER_M, HIGHER_M);
+    initializeVectors(positions, LOWER_P, HIGHER_P);
+    initializeVectors(velocities, LOWER_V, HIGHER_v);
 
 
     // simulation run
@@ -492,7 +462,7 @@ int main() {
 
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    std::cout << "Computation took " << duration.count() << " milliseconds." << std::endl;
+    std::cout <<std::endl << "Computation took " << duration.count() << " milliseconds." << std::endl;
 
     return 0;
 }
