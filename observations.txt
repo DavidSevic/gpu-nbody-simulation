@@ -1,0 +1,12 @@
+1. CPU: Barnes-hut is faster than naive
+
+1k bodies on naive approach cpu ~ 12.000 ms
+1k bodies on barnes-hut approach cpu ~ 9.000 ms
+
+10k bodies on naive approach cpu ~ 1.200.000 ms (100x slower)
+10k bodies on barnes-hut approach cpu ~ 240.000 ms (25x slower)
+
+2. Cpu barnes-hut and gpu (initialization only) barnes-hut are similar
+
+1k bodies both ~ 9.000 ms96
+10k bodies both ~ 240.000 ms (25x slower)
