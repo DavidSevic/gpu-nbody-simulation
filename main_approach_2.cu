@@ -15,7 +15,7 @@ const double G = 6.67e-11;
 const int N_BODIES = 1000;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
-const int N_SIMULATIONS = 100;
+const int N_SIMULATIONS = 3;
 const double LOWER_M = 1e-6;
 const double HIGHER_M = 1e6;
 const double LOWER_P = -1e-1;
@@ -30,24 +30,28 @@ using Velocities = std::array<Vector, N_BODIES>;
 using Forces = std::array<Vector, N_BODIES>;
 using Masses = std::array<double, N_BODIES>;
 using Accelerations = std::array<Vector, N_BODIES>;
-using Quadrant = std::array<double, 12>;
 
 // Constants for indexing the Quadrant array
-constexpr int CHILDREN_0 = 0;
-constexpr int CHILDREN_1 = 1;
-constexpr int CHILDREN_2 = 2;
-constexpr int CHILDREN_3 = 3;
-constexpr int CENTER_OF_MASS_X = 4;
-constexpr int CENTER_OF_MASS_Y = 5;
-constexpr int TOTAL_MASS = 6;
-constexpr int X_MIN = 7;
-constexpr int X_MAX = 8;
-constexpr int Y_MIN = 9;
-constexpr int Y_MAX = 10;
-constexpr int PARTICLE_INDEX = 11;
+const int QUADRANT_SIZE = 12;
+const int CHILDREN_0 = 0;
+const int CHILDREN_1 = 1;
+const int CHILDREN_2 = 2;
+const int CHILDREN_3 = 3;
+const int CENTER_OF_MASS_X = 4;
+const int CENTER_OF_MASS_Y = 5;
+const int TOTAL_MASS = 6;
+const int X_MIN = 7;
+const int X_MAX = 8;
+const int Y_MIN = 9;
+const int Y_MAX = 10;
+const int PARTICLE_INDEX = 11;
 
-std::vector<Quadrant> quadtree;
 const double THETA = 5e-1;
+const int QUADTREE_MAX_DEPTH = 10;
+const int QUADTREE_MAX_SIZE = static_cast<int>(pow(4, QUADTREE_MAX_DEPTH));
+
+using Quadrant = std::array<double, QUADRANT_SIZE>;
+std::vector<Quadrant> quadtree;
 
 const int MAX_BLOCK_SIZE = 1024; // limit for threads in CUDA
 
@@ -173,7 +177,33 @@ int DetermineChild(const Vector& pos, const Quadrant& node) {
     return 3;                                          // Top-right
 }
 
-void QuadInsert(int particle_index, int node_index, const Positions& positions, const Masses& masses) {
+void QuadInsert(int particle_index, int node_index, const Positions& positions, const Masses& masses, int current_depth) {
+    // Check if current depth exceeds maximum depth
+    if (current_depth > QUADTREE_MAX_DEPTH) {
+        //std::cout<<"reached max depth"<<std::endl;
+        // At max depth, aggregate mass and center of mass
+        Quadrant& node = quadtree[node_index];
+        const Vector& pos = positions[particle_index];
+        double mass = masses[particle_index];
+
+        // Update center of mass
+        double existing_mass = node[TOTAL_MASS];
+        double existing_x = node[CENTER_OF_MASS_X];
+        double existing_y = node[CENTER_OF_MASS_Y];
+
+        node[CENTER_OF_MASS_X] = (existing_mass * existing_x + mass * pos[0]) / (existing_mass + mass);
+        node[CENTER_OF_MASS_Y] = (existing_mass * existing_y + mass * pos[1]) / (existing_mass + mass);
+        node[TOTAL_MASS] += mass;
+
+        // No need to track individual particle indices at max depth
+        return;
+    }
+
+    // Ensure node_index is valid
+    if (node_index >= quadtree.size()) {
+        std::cerr << "Invalid node index: " << node_index << std::endl;
+        return;
+    }
 
     Quadrant node = quadtree[node_index];
     const Vector& pos = positions[particle_index];
@@ -184,20 +214,29 @@ void QuadInsert(int particle_index, int node_index, const Positions& positions, 
                           node[TOTAL_MASS] == 0.0);
 
     if (is_empty_leaf) {
+        // Assign particle to this empty leaf
         node[CENTER_OF_MASS_X] = pos[0];
         node[CENTER_OF_MASS_Y] = pos[1];
         node[TOTAL_MASS] = mass;
         node[PARTICLE_INDEX] = particle_index;
-        // save the copy node
         quadtree[node_index] = node;
         return;
     }
-    if (node[TOTAL_MASS] > 0.0 && node[PARTICLE_INDEX] != -1) {
-        for (int i = 0; i < 4; ++i) {
-            Quadrant child;
-            double mid_x = (node[X_MIN] + node[X_MAX]) / 2;
-            double mid_y = (node[Y_MIN] + node[Y_MAX]) / 2;
 
+    if (node[TOTAL_MASS] > 0.0 && node[PARTICLE_INDEX] != -1) {
+        // Subdivide the node by creating children
+        for (int i = 0; i < 4; ++i) {
+            // i guess remove this
+            if (quadtree.size() >= QUADTREE_MAX_SIZE) {
+                std::cerr << "Quadtree reached maximum size during subdivision." << std::endl;
+                return; // Prevent exceeding max size
+            }
+
+            Quadrant child;
+            double mid_x = (node[X_MIN] + node[X_MAX]) / 2.0;
+            double mid_y = (node[Y_MIN] + node[Y_MAX]) / 2.0;
+
+            // Initialize child bounds based on quadrant
             if (i == 0) {
                 child = {-1, -1, -1, -1, 0.0, 0.0, 0.0, node[X_MIN], mid_x, node[Y_MIN], mid_y, -1};
             } else if (i == 1) {
@@ -209,11 +248,11 @@ void QuadInsert(int particle_index, int node_index, const Positions& positions, 
             }
 
             int child_index = quadtree.size();
-
             quadtree.push_back(child);
             node[CHILDREN_0 + i] = child_index;
         }
 
+        // Reset current node's mass and particle index
         Vector existing_pos = {node[CENTER_OF_MASS_X], node[CENTER_OF_MASS_Y]};
         double existing_mass = node[TOTAL_MASS];
         int existing_particle_index = static_cast<int>(node[PARTICLE_INDEX]);
@@ -221,14 +260,16 @@ void QuadInsert(int particle_index, int node_index, const Positions& positions, 
         node[CENTER_OF_MASS_Y] = 0.0;
         node[TOTAL_MASS] = 0.0;
         node[PARTICLE_INDEX] = -1;
-        int existing_child_index = DetermineChild(existing_pos, node);
-        // save the copy node
         quadtree[node_index] = node;
-        QuadInsert(existing_particle_index, node[CHILDREN_0 + existing_child_index], positions, masses);
+
+        // Insert the existing particle into the appropriate child
+        int existing_child_index = DetermineChild(existing_pos, node);
+        QuadInsert(existing_particle_index, node[CHILDREN_0 + existing_child_index], positions, masses, current_depth + 1);
     }
 
+    // Determine which child quadrant the new particle belongs to
     int child_index = DetermineChild(pos, node);
-    QuadInsert(particle_index, node[CHILDREN_0 + child_index], positions, masses);
+    QuadInsert(particle_index, node[CHILDREN_0 + child_index], positions, masses, current_depth + 1);
 }
 
 std::pair<double, Vector> ComputeMass(int node_index) {
@@ -340,7 +381,7 @@ std::vector<Quadrant> buildTree(const Positions& positions, const Masses& masses
     InitializeRoot(xMin, xMax, yMin, yMax);
 
     for (int i = 0; i < N_BODIES; ++i) {
-        QuadInsert(i, 0, positions, masses);
+        QuadInsert(i, 0, positions, masses, 1);
     }
     ComputeMass(0);
     return quadtree;
@@ -438,6 +479,18 @@ void updateAccelerations(const Forces& forces, const Masses& masses, Positions& 
     }
 }
 
+__global__ void updateAccelerationsGpu(double* forces, double* masses, double* accelerations) {
+    
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx >= N_BODIES)
+        return;
+
+    for (int k = 0; k < N_DIM; ++k) {
+        accelerations[idx * N_DIM + k] = forces[idx * N_DIM + k] / masses[idx];
+    }
+}
+
 void updateVelocities(Velocities& velocities, const Positions& accelerations, double DELTA_T) {
     for (int i = 0; i < N_BODIES; ++i) {
         for (int k = 0; k < N_DIM; ++k) {
@@ -446,11 +499,35 @@ void updateVelocities(Velocities& velocities, const Positions& accelerations, do
     }
 }
 
+__global__ void updateVelocitiesGpu(double* velocities, double* accelerations, double DELTA_T) {
+    
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx >= N_BODIES)
+        return;
+    
+    for (int k = 0; k < N_DIM; ++k) {
+        velocities[idx * N_DIM + k] += accelerations[idx * N_DIM + k] * DELTA_T;
+    }
+}
+
 void updatePositions(Positions& positions, const Velocities& velocities, double DELTA_T) {
     for (int i = 0; i < N_BODIES; ++i) {
         for (int k = 0; k < N_DIM; ++k) {
             positions[i][k] += velocities[i][k] * DELTA_T;
         }
+    }
+}
+
+__global__ void updatePositionsGpu(double* positions, double* velocities, double DELTA_T) {
+    
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx >= N_BODIES)
+        return;
+    
+    for (int k = 0; k < N_DIM; ++k) {
+        positions[idx * N_DIM + k] += velocities[idx * N_DIM + k] * DELTA_T;
     }
 }
 
@@ -481,7 +558,7 @@ void savePositions(std::string& output_str, const Positions& positions, double t
     }
 }
 
-void runSimulation(Masses& masses, Positions& positions, Velocities& velocities) {
+void runSimulationCpu(Masses& masses, Positions& positions, Velocities& velocities) {
     Accelerations accelerations = {};
     Forces forces = {};
 
@@ -502,15 +579,15 @@ void runSimulation(Masses& masses, Positions& positions, Velocities& velocities)
 
         // create the quadtree
 
-        if(step == N_SIMULATIONS - 1)
+        if(step == 0)//N_SIMULATIONS - 1)
             start = std::chrono::high_resolution_clock::now();
 
         quadtree = buildTree(positions, masses);
 
-        if(step == N_SIMULATIONS - 1) {
+        if(step == 0){//N_SIMULATIONS - 1) {
             auto end = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            std::cout <<std::endl << "Building tree took " << duration.count() << " milliseconds." << std::endl;
+            std::cout <<std::endl << "CPU: Building tree took " << duration.count() << " milliseconds." << std::endl;
         }
         
         // Write the quadtree to a file for visualization
@@ -519,18 +596,18 @@ void runSimulation(Masses& masses, Positions& positions, Velocities& velocities)
         else if (step == N_SIMULATIONS - 1)
             TraverseTreeToFile(0, tree_file_final, positions);
 
-        if(step == N_SIMULATIONS - 1)
+        if(step == 0)// N_SIMULATIONS - 1)
             start = std::chrono::high_resolution_clock::now();
         
         computeForces(positions, masses, forces);
         
-        if(step == N_SIMULATIONS - 1) {
+        if(step == 0){//N_SIMULATIONS - 1) {
             auto end = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            std::cout <<std::endl << "Force computations took " << duration.count() << " milliseconds." << std::endl;
+            std::cout <<std::endl << "CPU: Force computations took " << duration.count() << " milliseconds." << std::endl;
         }
         
-        if(step == N_SIMULATIONS - 1)
+        if(step == 0)//N_SIMULATIONS - 1)
             start = std::chrono::high_resolution_clock::now();
 
         updateAccelerations(forces, masses, accelerations);
@@ -539,10 +616,10 @@ void runSimulation(Masses& masses, Positions& positions, Velocities& velocities)
         
         updatePositions(positions, velocities, DELTA_T);
 
-         if(step == N_SIMULATIONS - 1) {
+         if(step == 0){//N_SIMULATIONS - 1) {
             auto end = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            std::cout <<std::endl << "The rest took " << duration.count() << " milliseconds." << std::endl;
+            std::cout <<std::endl << "CPU: The rest took " << duration.count() << " milliseconds." << std::endl;
         }
 
         savePositions(output_str, positions, absolute_t);
@@ -555,32 +632,127 @@ void runSimulation(Masses& masses, Positions& positions, Velocities& velocities)
     tree_file_final.close();
 }
 
+void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities) {
+    double* masses_d;
+    double* positions_d;
+    double* velocities_d;
+    double* accelerations_d;
+    double* forces_d;
+    double* quadtree_d;
+
+    cudaMalloc( (void**)&masses_d, N_BODIES * sizeof(double));
+    cudaMalloc( (void**)&positions_d, N_BODIES * N_DIM * sizeof(double));
+    cudaMalloc( (void**)&velocities_d, N_BODIES * N_DIM * sizeof(double));
+    cudaMalloc( (void**)&accelerations_d, N_BODIES * N_DIM * sizeof(double));
+    cudaMalloc( (void**)&forces_d, N_BODIES * N_DIM * sizeof(double));
+    cudaMalloc( (void**)&forces_d, N_BODIES * N_DIM * sizeof(double));
+
+    cudaMemcpy( masses_d, masses.data(), N_BODIES * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy( positions_d, positions.data(), N_BODIES * N_DIM * sizeof(double), cudaMemcpyHostToDevice);
+    cudaMemcpy( velocities_d, velocities.data(), N_BODIES * N_DIM * sizeof(double), cudaMemcpyHostToDevice);
+
+    int blockSize = (N_BODIES <= MAX_BLOCK_SIZE) ? N_BODIES : MAX_BLOCK_SIZE;
+
+    dim3 dimBlock(blockSize);
+	dim3 dimGrid((N_BODIES + blockSize - 1) / blockSize);
+
+    double absolute_t = 0.0;
+    
+    for (int step = 0; step < N_SIMULATIONS; ++step) {
+        absolute_t += DELTA_T;
+
+        //computeForcesGpu<<<dimGrid, dimBlock>>>(positions_d, masses_d, forces_d);
+        cudaDeviceSynchronize();
+        updateAccelerationsGpu<<<dimGrid, dimBlock>>>(forces_d, masses_d, accelerations_d);
+        cudaDeviceSynchronize();
+        updateVelocitiesGpu<<<dimGrid, dimBlock>>>(velocities_d, accelerations_d, DELTA_T);
+        cudaDeviceSynchronize();
+        updatePositionsGpu<<<dimGrid, dimBlock>>>(positions_d, velocities_d, DELTA_T);
+    }
+    
+    cudaMemcpy( positions.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
+
+    cudaFree(masses_d);
+    cudaFree(positions_d);
+    cudaFree(velocities_d);
+    cudaFree(accelerations_d);
+    cudaFree(forces_d);
+}
+
+void checkEqual(const auto& first, const auto& second, const std::string& name) {
+    bool allEqual = true;
+
+    for (size_t i = 0; i < first.size(); ++i) {
+        for (size_t j = 0; j < first[i].size(); ++j) {
+            if (std::fabs(first[i][j] - second[i][j]) > 1e-3) {
+                allEqual = false;
+                std::cout << "Difference at index [" << i << "][" << j << "]: "
+                          << "first = " << first[i][j]
+                          << ", second = " << second[i][j]
+                          << " , and the diff is: " << std::fabs(first[i][j] - second[i][j]) << std::endl;
+                break;
+            }
+        }
+    }
+    if (allEqual) {
+        std::cout << "\nThe " << name << " are the same.";
+    } else {
+        std::cout << "\n\n!!!!! The " << name << " are NOT the same !!!!!\n\n";
+    }
+}
+
 int main() {
 
     std::srand(static_cast<unsigned>(std::time(0)));
 
+    //temp
+    quadtree.reserve(QUADTREE_MAX_SIZE);
 
     // structures
     Masses masses;
     Positions positions;
     Velocities velocities;
 
-
     // initialization
-    //initializeGpu(masses, positions, velocities);
+    initializeGpu(masses, positions, velocities);
     
-    initializeMasses(masses, LOWER_M, HIGHER_M);
+    /*initializeMasses(masses, LOWER_M, HIGHER_M);
     initializeVectors(positions, LOWER_P, HIGHER_P);
     initializeVectors(velocities, LOWER_V, HIGHER_v);
+    */
+
+    // cpu simulation run
+
+    Positions positions_cpu = positions;
+
+    auto start_cpu = std::chrono::high_resolution_clock::now();
+
+    runSimulationCpu(masses, positions_cpu, velocities);
+
+    auto end_cpu = std::chrono::high_resolution_clock::now();
+    auto duration_cpu = std::chrono::duration_cast<std::chrono::milliseconds>(end_cpu - start_cpu);
+
+    // gpu simulation run
+
+    Positions positions_gpu = positions;
+
+    auto start_gpu = std::chrono::high_resolution_clock::now();
+
+    //runSimulationGpu(masses, positions_gpu, velocities);
     
-    // simulation run
-    auto start = std::chrono::high_resolution_clock::now();
+    auto end_gpu = std::chrono::high_resolution_clock::now();
+    auto duration_gpu = std::chrono::duration_cast<std::chrono::milliseconds>(end_gpu - start_gpu);
 
-    runSimulation(masses, positions, velocities);
+    std::cout<<std::endl<<std::endl;
 
-    auto end = std::chrono::high_resolution_clock::now();
-    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-    std::cout <<std::endl << "Computation took " << duration.count() << " milliseconds." << std::endl;
+    checkEqual(positions_cpu, positions_gpu, "final positions");
+
+    std::cout<<std::endl<<std::endl;
+
+    std::cout << "CPU computation took " << duration_cpu.count() << " milliseconds." << std::endl;
+    std::cout << "GPU computation took " << duration_gpu.count() << " milliseconds." << std::endl;
+
+    std::cout<<std::endl<<std::endl;
 
     return 0;
 }

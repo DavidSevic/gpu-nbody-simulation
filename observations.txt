@@ -8,5 +8,31 @@
 
 2. Cpu barnes-hut and gpu (initialization only) barnes-hut are similar
 
-1k bodies both ~ 9.000 ms96
+1k bodies both ~ 9.000 ms
 10k bodies both ~ 240.000 ms (25x slower)
+
+but cpu initialization is ~ 0/1 ms, while gpu is ~ 220ms, possibly because of the transfer
+
+BUT: the copying back to cpu is only needed for this approach of both cpu and gpu in one file, that can be removed
+
+3. CPU: Building the tree is very fast (1ms) compared to force calculation (68 ms last step and 31ms first step) (10.000 bodies and 100 steps)
+
+
+Conclusions:
+
+- Quadtree is being created in each simualtion step and will change its size. 
+So since we cant implement the tree creation on gpu, we will create it on cpu (which we saw is not computationally expensive), 
+and then transfer it to gpu. So in terms of allocating this memory on gpu, we have two options. 
+1: In each simulation step, we create the tree and based on its size, we allocate that much memory on gpu and at the end of the iteration, 
+we deallocate this memory. This is not a good approach becasue allocations and deallocations are slow. 
+2: We have a predefined max size of the quadtree and we will allocate this much memory at the start and then use it in each iteration 
+and deallocate at the very end. The quadtree for particles by default does not have a max size, it all depends on the positions 
+of the particles. Particles that are extremly close will go very deep into the tree. So to include the max size, we need to limit the maximum 
+depth of the tree. And then, some particles that are close to each other will end up in the same tree node (quadrant). 
+Now, looking at our quadrant structure, we do have this particle_index which is storing information about which particle is in that 
+quadrant. So now since we can have multiple particles in the same quadrant at max depth, do we need to change this strucure? 
+One option is to include a new array in the quadrant to keep track of all the particles that are grouped together. 
+However, looking at our force calcualtion implementation, the only time we are using this particle_index is to make sure we 
+dont calculate the particle's force with itself. So, what if we ge to the point where we look at the max depth quadrant and 
+its one particle_index, even though the current particle index might also be inside that quadrant, we dont care, because this 
+is the max depth quadrant and we will in any case concider it one group and calculate the force with the whole quadrant.
