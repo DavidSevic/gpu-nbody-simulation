@@ -33,6 +33,6 @@ Now, looking at our quadrant structure, we do have this particle_index which is 
 quadrant. So now since we can have multiple particles in the same quadrant at max depth, do we need to change this strucure? 
 One option is to include a new array in the quadrant to keep track of all the particles that are grouped together. 
 However, looking at our force calcualtion implementation, the only time we are using this particle_index is to make sure we 
-dont calculate the particle's force with itself. So, what if we ge to the point where we look at the max depth quadrant and 
+dont calculate the particle's force with itself (and we cover that case with negative particle index). So, what if we ge to the point where we look at the max depth quadrant and 
 its one particle_index, even though the current particle index might also be inside that quadrant, we dont care, because this 
 is the max depth quadrant and we will in any case concider it one group and calculate the force with the whole quadrant.

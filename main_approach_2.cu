@@ -15,9 +15,9 @@ const double G = 6.67e-11;
 const int N_BODIES = 1000;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
-const int N_SIMULATIONS = 3;
-const double LOWER_M = 1e-6;
-const double HIGHER_M = 1e6;
+const int N_SIMULATIONS = 100;
+const double LOWER_M = 1e-2;
+const double HIGHER_M = 1e-1;
 const double LOWER_P = -1e-1;
 const double HIGHER_P = 1e-1;
 const double LOWER_V = -1e-4;
@@ -195,6 +195,11 @@ void QuadInsert(int particle_index, int node_index, const Positions& positions, 
         node[CENTER_OF_MASS_Y] = (existing_mass * existing_y + mass * pos[1]) / (existing_mass + mass);
         node[TOTAL_MASS] += mass;
 
+        if(existing_mass == 0)
+            node[PARTICLE_INDEX] = -1 * particle_index - 2; // because 0th and 1st particles
+        else
+            node[PARTICLE_INDEX] = -1;
+
         // No need to track individual particle indices at max depth
         return;
     }
@@ -223,7 +228,7 @@ void QuadInsert(int particle_index, int node_index, const Positions& positions, 
         return;
     }
 
-    if (node[TOTAL_MASS] > 0.0 && node[PARTICLE_INDEX] != -1) {
+    if (node[TOTAL_MASS] > 0.0 && node[PARTICLE_INDEX] > -1) {
         // Subdivide the node by creating children
         for (int i = 0; i < 4; ++i) {
             // i guess remove this
@@ -318,6 +323,11 @@ void TraverseTreeToFile(int node_index, std::ofstream& file,
         file << " occupantIndex=" << occupantIdx
              << " occupantPos=(" << positions[occupantIdx][0]
              << "," << positions[occupantIdx][1] << ")";
+    } else if (node[TOTAL_MASS] > 0) {
+        // index not important, but we put quadrant center of mass
+        file << " occupantIndex=" << occupantIdx
+             << " occupantPos=(" << node[CENTER_OF_MASS_X]
+             << "," << node[CENTER_OF_MASS_Y] << ")";
     }
 
     file << "\n";
@@ -437,10 +447,10 @@ void computeForces(const Positions& positions,
 
             // Barnes-Hut criterion: if node is leaf OR size/distance < THETA
             // => approximate entire subtree as one body
-            if (isLeaf || (node_size / distance < THETA)) 
+            if (isLeaf || (node_size / distance < THETA))
             {
                 // if it's a leaf for occupant i, skip self-interaction
-                if (isLeaf && occupantIdx == i) {
+                if (isLeaf && (occupantIdx == i || (occupantIdx + 2) == -i)) {
                     continue;
                 }
 

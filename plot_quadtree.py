@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import sys
 
 occupant_pattern = re.compile(
-    r"occupantIndex=(\d+)\s+occupantPos=\(([-0-9.e+]+),([-0-9.e+]+)\)"
+    r"occupantIndex=(-?\d+)\s+occupantPos=\(([-0-9.e+]+),([-0-9.e+]+)\)"
 )
 
 def parse_quadtree_file(filename):
