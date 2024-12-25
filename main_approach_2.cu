@@ -15,7 +15,7 @@ const double G = 6.67e-11;
 const int N_BODIES = 1000;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
-const int N_SIMULATIONS = 100;
+const int N_SIMULATIONS = 1000;
 const double LOWER_M = 1e-2;
 const double HIGHER_M = 1e-1;
 const double LOWER_P = -1e-1;
@@ -481,6 +481,115 @@ void computeForces(const Positions& positions,
     } // end for each body
 }
 
+__global__ void computeForcesGpu(double* positions, double* masses, double* forces, double* quadtree) {
+    
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx >= N_BODIES)
+        return;
+
+        double sum[2] = {0, 0};
+
+        double pos_i[2] = {positions[idx * 2 + 0], positions[idx * 2 + 1]};
+
+        // use a stack of node indices
+        std::stack<int> nodeStack;
+        nodeStack.push(0); // root is index 0
+
+        while (!nodeStack.empty())
+        {
+            int nodeIndex = nodeStack.top();
+            nodeStack.pop();
+
+            //const Quadrant& node = quadtree[nodeIndex];
+            double* node = &quadtree[nodeIndex * QUADRANT_SIZE];
+
+            // if this node has zero mass, skip
+            double nodeMass = node[TOTAL_MASS];
+            if (nodeMass <= 1e-15) {
+                continue;
+            }
+
+            // if this node is a leaf with a single occupant
+            int occupantIdx = static_cast<int>(node[PARTICLE_INDEX]);
+            bool isLeaf = (node[CHILDREN_0] == -1 && 
+                           node[CHILDREN_1] == -1 &&
+                           node[CHILDREN_2] == -1 &&
+                           node[CHILDREN_3] == -1);
+
+            // compute displacement from body idx to this node's center of mass
+            double displacement[2] = {0, 0};
+            displacement[0] = node[CENTER_OF_MASS_X] - pos_i[0];
+            displacement[1] = node[CENTER_OF_MASS_Y] - pos_i[1];
+
+            double distance_sq = displacement[0]*displacement[0] + displacement[1]*displacement[1];
+            double distance    = std::sqrt(distance_sq) + 1e-15; // small offset to avoid division by zero
+
+            // approximate node size
+            double dx = node[X_MAX] - node[X_MIN];
+            double dy = node[Y_MAX] - node[Y_MIN];
+            double node_size = (dx > dy) ? dx : dy;  // max dimension in 2D
+
+            // Barnes-Hut criterion: if node is leaf OR size/distance < THETA
+            // => approximate entire subtree as one body
+            if (isLeaf || (node_size / distance < THETA))
+            {
+                // if it's a leaf for occupant idx, skip self-interaction
+                if (isLeaf && (occupantIdx == idx || (occupantIdx + 2) == -idx)) {
+                    continue;
+                }
+
+                // accumulate approximate force
+                double force_mag = (G * masses[idx] * nodeMass) / (distance_sq);
+
+                // normalized direction
+                double nx = displacement[0] / distance;
+                double ny = displacement[1] / distance;
+
+                sum[0] += force_mag * nx;
+                sum[1] += force_mag * ny;
+            }
+            else
+            {
+                for (int c = 0; c < 4; ++c)
+                {
+                    int childIdx = static_cast<int>(node[CHILDREN_0  + c]);
+                    if (childIdx != -1) {
+                        nodeStack.push(childIdx);
+                    }
+                }
+            }
+        } // end while stack
+
+        // store final force for body idx
+        forces[idx * 2 + 0] = sum[0];
+        forces[idx * 2 + 1] = sum[1];
+
+    /*
+    double sum[N_DIM] = {};
+    for (int j = 0; j < N_BODIES; ++j) {
+        if (idx == j) continue;
+
+        double distance_squared = 0.0;
+        double displacement[N_DIM] = {};
+        for (int k = 0; k < N_DIM; ++k) {
+            displacement[k] = positions[j * N_DIM + k] - positions[idx * N_DIM + k];
+            distance_squared += displacement[k] * displacement[k];
+        }
+
+        double distance = std::sqrt(distance_squared);
+        double factor = G * masses[idx] * masses[j] / (distance_squared * distance);
+
+        for (int k = 0; k < N_DIM; ++k) {
+            sum[k] += factor * displacement[k];
+        }
+    }
+    for (int k = 0; k < N_DIM; ++k) {
+        forces[idx * N_DIM + k] = sum[k];
+    }
+    */
+}
+
 void updateAccelerations(const Forces& forces, const Masses& masses, Positions& accelerations) {
     for (int i = 0; i < N_BODIES; ++i) {
         for (int k = 0; k < N_DIM; ++k) {
@@ -655,7 +764,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     cudaMalloc( (void**)&velocities_d, N_BODIES * N_DIM * sizeof(double));
     cudaMalloc( (void**)&accelerations_d, N_BODIES * N_DIM * sizeof(double));
     cudaMalloc( (void**)&forces_d, N_BODIES * N_DIM * sizeof(double));
-    cudaMalloc( (void**)&forces_d, N_BODIES * N_DIM * sizeof(double));
+    cudaMalloc( (void**)&quadtree_d, QUADTREE_MAX_SIZE * sizeof(Quadrant));
 
     cudaMemcpy( masses_d, masses.data(), N_BODIES * sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy( positions_d, positions.data(), N_BODIES * N_DIM * sizeof(double), cudaMemcpyHostToDevice);
@@ -671,13 +780,19 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     for (int step = 0; step < N_SIMULATIONS; ++step) {
         absolute_t += DELTA_T;
 
-        //computeForcesGpu<<<dimGrid, dimBlock>>>(positions_d, masses_d, forces_d);
+        // build the tree on cpu
+        quadtree = buildTree(positions, masses);
+        // copy it to gpu
+        cudaMemcpy( quadtree_d, quadtree.data(), quadtree.size() * sizeof(Quadrant), cudaMemcpyHostToDevice);
+
+        computeForcesGpu<<<dimGrid, dimBlock>>>(positions_d, masses_d, forces_d, quadtree_d);
         cudaDeviceSynchronize();
         updateAccelerationsGpu<<<dimGrid, dimBlock>>>(forces_d, masses_d, accelerations_d);
         cudaDeviceSynchronize();
         updateVelocitiesGpu<<<dimGrid, dimBlock>>>(velocities_d, accelerations_d, DELTA_T);
         cudaDeviceSynchronize();
         updatePositionsGpu<<<dimGrid, dimBlock>>>(positions_d, velocities_d, DELTA_T);
+        cudaDeviceSynchronize();
     }
     
     cudaMemcpy( positions.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
