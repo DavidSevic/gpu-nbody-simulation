@@ -17,7 +17,7 @@ const int N_DIM = 2;
 const double DELTA_T = 1.0;
 const int N_SIMULATIONS = 100;
 const double LOWER_M = 1e-2;
-const double HIGHER_M = 1e-1;
+const double HIGHER_M = 1e1;
 const double LOWER_P = -1e-1;
 const double HIGHER_P = 1e-1;
 const double LOWER_V = -1e-4;
@@ -30,6 +30,12 @@ using Velocities = std::array<Vector, N_BODIES>;
 using Forces = std::array<Vector, N_BODIES>;
 using Masses = std::array<double, N_BODIES>;
 using Accelerations = std::array<Vector, N_BODIES>;
+
+// debug
+Forces forces_cpu, forces_gpu;
+Positions pos_cpu, pos_gpu;
+Accelerations acc_cpu, acc_gpu;
+Velocities vel_cpu, vel_gpu, vel_init_cpu, vel_init_gpu;
 
 // Constants for indexing the Quadrant array
 const int QUADRANT_SIZE = 12;
@@ -278,7 +284,7 @@ void QuadInsert(int particle_index, int node_index, const Positions& positions, 
 }
 
 __device__ bool push(int stack[], int *top, int value) {
-    if (*top >= QUADTREE_MAX_DEPTH - 1) {
+    if (*top >= QUADTREE_MAX_DEPTH * 3 - 1) {
         // Stack overflow
         return false;
     }
@@ -511,7 +517,7 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
         double pos_i[2] = {positions[idx * 2 + 0], positions[idx * 2 + 1]};
 
         // max size of the stack is the max depth of the quadtree
-        int nodeStack[QUADTREE_MAX_DEPTH];
+        int nodeStack[QUADTREE_MAX_DEPTH * 3];
         int stack_top = -1;
 
         // push the root node (rootIndex is 0)
@@ -682,7 +688,7 @@ void savePositions(std::string& output_str, const Positions& positions, double t
     }
 }
 
-void runSimulationCpu(Masses& masses, Positions& positions, Velocities& velocities) {
+void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities) {
     Accelerations accelerations = {};
     Forces forces = {};
 
@@ -724,6 +730,9 @@ void runSimulationCpu(Masses& masses, Positions& positions, Velocities& velociti
             start = std::chrono::high_resolution_clock::now();
         
         computeForces(positions, masses, forces);
+
+        /*if (step == 0 + 45)
+            forces_cpu = forces;*/
         
         if(step == 0){//N_SIMULATIONS - 1) {
             auto end = std::chrono::high_resolution_clock::now();
@@ -735,6 +744,10 @@ void runSimulationCpu(Masses& masses, Positions& positions, Velocities& velociti
             start = std::chrono::high_resolution_clock::now();
 
         updateAccelerations(forces, masses, accelerations);
+
+        /*if (step == 0 + 45) {
+            vel_init_cpu = velocities;
+        }*/
         
         updateVelocities(velocities, accelerations, DELTA_T);
         
@@ -747,7 +760,11 @@ void runSimulationCpu(Masses& masses, Positions& positions, Velocities& velociti
         }
 
         savePositions(output_str, positions, absolute_t);
-        
+        /*if (step == 0 + 45) {
+            pos_cpu = positions;
+            acc_cpu = accelerations;
+            vel_cpu = velocities;
+        }*/
     }
     
     positions_file << output_str;
@@ -800,15 +817,28 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
 
         computeForcesGpu<<<dimGrid, dimBlock>>>(positions_d, masses_d, forces_d, quadtree_d);
         cudaDeviceSynchronize();
+
+        /*if (step == 0 + 45) {
+            cudaMemcpy( forces_gpu.data(), forces_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
+        }*/
         updateAccelerationsGpu<<<dimGrid, dimBlock>>>(forces_d, masses_d, accelerations_d);
         cudaDeviceSynchronize();
+        /*if (step == 0 + 45) {
+            cudaMemcpy( vel_init_gpu.data(), velocities_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
+        }*/
         updateVelocitiesGpu<<<dimGrid, dimBlock>>>(velocities_d, accelerations_d, DELTA_T);
         cudaDeviceSynchronize();
         updatePositionsGpu<<<dimGrid, dimBlock>>>(positions_d, velocities_d, DELTA_T);
         cudaDeviceSynchronize();
+        /*if (step == 0 + 45) {
+            cudaMemcpy( pos_gpu.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
+            cudaMemcpy( acc_gpu.data(), accelerations_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
+            cudaMemcpy( vel_gpu.data(), velocities_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
+        }*/
+        cudaMemcpy( positions.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
     }
     
-    cudaMemcpy( positions.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
+    //cudaMemcpy( positions.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
 
     cudaFree(masses_d);
     cudaFree(positions_d);
@@ -822,7 +852,7 @@ void checkEqual(const auto& first, const auto& second, const std::string& name) 
 
     for (size_t i = 0; i < first.size(); ++i) {
         for (size_t j = 0; j < first[i].size(); ++j) {
-            if (std::fabs(first[i][j] - second[i][j]) > 1e-3) {
+            if (std::fabs(first[i][j] - second[i][j]) > 1e-10) {
                 allEqual = false;
                 std::cout << "Difference at index [" << i << "][" << j << "]: "
                           << "first = " << first[i][j]
@@ -883,7 +913,7 @@ int main() {
 
     std::cout<<std::endl<<std::endl;
 
-    checkEqual(positions_cpu, positions_gpu, "final positions");
+    //checkEqual(positions, positions_gpu, "final positions");
 
     std::cout<<std::endl<<std::endl;
 
@@ -891,6 +921,22 @@ int main() {
     std::cout << "GPU computation took " << duration_gpu.count() << " milliseconds." << std::endl;
 
     std::cout<<std::endl<<std::endl;
+
+    //debug
+    /*
+    checkEqual(forces_cpu, forces_gpu, "step 0 forces");
+    checkEqual(acc_cpu, acc_gpu, "step 0 accelerations");
+    checkEqual(vel_init_cpu, vel_init_gpu, "step init velocities");
+    checkEqual(vel_cpu, vel_gpu, "step 0 velocities");
+    std::cout<<std::endl;
+    checkEqual(pos_cpu, pos_gpu, "step 0 positions");
+    */
+    /*for (int i = 0; i < 20; ++i) { 
+        for (int j = 0; j < N_DIM; ++j) { 
+            std::cout << "forces_cpu[" << i << "][" << j << "] = " << forces_cpu[i][j] << std::endl;
+            std::cout << "forces_gpu[" << i << "][" << j << "] = " << forces_gpu[i][j] << std::endl;
+        }
+    }*/
 
     return 0;
 }

@@ -36,3 +36,8 @@ However, looking at our force calcualtion implementation, the only time we are u
 dont calculate the particle's force with itself (and we cover that case with negative particle index). So, what if we ge to the point where we look at the max depth quadrant and 
 its one particle_index, even though the current particle index might also be inside that quadrant, we dont care, because this 
 is the max depth quadrant and we will in any case concider it one group and calculate the force with the whole quadrant.
+
+
+Max size of stack is changed to max_depth * 3, because in worst case scenario we will have 3 children pushed on stack per level while traversing. (I think)
+
+The results are not completely pricise, e.g. with 1000 bodies, they start to diviate slightly around 45th iteration and then the changes get bigger and bigger. but the final trees are nearly identical
