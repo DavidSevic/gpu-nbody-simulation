@@ -15,7 +15,7 @@ const double G = 6.67e-11;
 const int N_BODIES = 1000;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
-const int N_SIMULATIONS = 1000;
+const int N_SIMULATIONS = 100;
 const double LOWER_M = 1e-2;
 const double HIGHER_M = 1e-1;
 const double LOWER_P = -1e-1;
@@ -277,6 +277,24 @@ void QuadInsert(int particle_index, int node_index, const Positions& positions, 
     QuadInsert(particle_index, node[CHILDREN_0 + child_index], positions, masses, current_depth + 1);
 }
 
+__device__ bool push(int stack[], int *top, int value) {
+    if (*top >= QUADTREE_MAX_DEPTH - 1) {
+        // Stack overflow
+        return false;
+    }
+    stack[++(*top)] = value;
+    return true;
+}
+
+__device__ bool pop(int stack[], int *top, int *value) {
+    if (*top < 0) {
+        // Stack underflow
+        return false;
+    }
+    *value = stack[(*top)--];
+    return true;
+}
+
 std::pair<double, Vector> ComputeMass(int node_index) {
     Quadrant& node = quadtree[node_index];
 
@@ -492,14 +510,22 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
 
         double pos_i[2] = {positions[idx * 2 + 0], positions[idx * 2 + 1]};
 
-        // use a stack of node indices
-        std::stack<int> nodeStack;
-        nodeStack.push(0); // root is index 0
+        // max size of the stack is the max depth of the quadtree
+        int nodeStack[QUADTREE_MAX_DEPTH];
+        int stack_top = -1;
 
-        while (!nodeStack.empty())
-        {
-            int nodeIndex = nodeStack.top();
-            nodeStack.pop();
+        // push the root node (rootIndex is 0)
+        if (!push(nodeStack, &stack_top, 0)) {
+            printf("Stack overflow while pushing root node.\n");
+            return;
+        }
+
+        while (stack_top >= 0) {
+            int nodeIndex;
+            if (!pop(nodeStack, &stack_top, &nodeIndex)) {
+                printf("Stack underflow while popping node.\n");
+                break;
+            }
 
             //const Quadrant& node = quadtree[nodeIndex];
             double* node = &quadtree[nodeIndex * QUADRANT_SIZE];
@@ -555,7 +581,10 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
                 {
                     int childIdx = static_cast<int>(node[CHILDREN_0  + c]);
                     if (childIdx != -1) {
-                        nodeStack.push(childIdx);
+                        if (!push(nodeStack, &stack_top, childIdx)) {
+                            printf("Stack overflow while pushing child node %d.\n", childIdx);
+                            break;
+                        }
                     }
                 }
             }
@@ -564,30 +593,6 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
         // store final force for body idx
         forces[idx * 2 + 0] = sum[0];
         forces[idx * 2 + 1] = sum[1];
-
-    /*
-    double sum[N_DIM] = {};
-    for (int j = 0; j < N_BODIES; ++j) {
-        if (idx == j) continue;
-
-        double distance_squared = 0.0;
-        double displacement[N_DIM] = {};
-        for (int k = 0; k < N_DIM; ++k) {
-            displacement[k] = positions[j * N_DIM + k] - positions[idx * N_DIM + k];
-            distance_squared += displacement[k] * displacement[k];
-        }
-
-        double distance = std::sqrt(distance_squared);
-        double factor = G * masses[idx] * masses[j] / (distance_squared * distance);
-
-        for (int k = 0; k < N_DIM; ++k) {
-            sum[k] += factor * displacement[k];
-        }
-    }
-    for (int k = 0; k < N_DIM; ++k) {
-        forces[idx * N_DIM + k] = sum[k];
-    }
-    */
 }
 
 void updateAccelerations(const Forces& forces, const Masses& masses, Positions& accelerations) {
@@ -681,15 +686,15 @@ void runSimulationCpu(Masses& masses, Positions& positions, Velocities& velociti
     Accelerations accelerations = {};
     Forces forces = {};
 
-    std::ofstream positions_file("positions.txt");
-    std::ofstream tree_file_init("quadtree_init.txt");
-    std::ofstream tree_file_final("quadtree_final.txt");
+    std::ofstream positions_file("positions_cpu.txt");
+    std::ofstream tree_file_init("quadtree_init_cpu.txt");
+    std::ofstream tree_file_final("quadtree_final_cpu.txt");
     std::string output_str;
 
     double absolute_t = 0.0;
 
     savePositions(output_str, positions, absolute_t);
-    //printBodies(masses, positions, velocities);
+    printBodies(masses, positions, velocities);
 
     auto start = std::chrono::high_resolution_clock::now();
     
@@ -759,6 +764,9 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     double* forces_d;
     double* quadtree_d;
 
+    std::ofstream tree_file_init("quadtree_init_gpu.txt");
+    std::ofstream tree_file_final("quadtree_final_gpu.txt");
+
     cudaMalloc( (void**)&masses_d, N_BODIES * sizeof(double));
     cudaMalloc( (void**)&positions_d, N_BODIES * N_DIM * sizeof(double));
     cudaMalloc( (void**)&velocities_d, N_BODIES * N_DIM * sizeof(double));
@@ -784,6 +792,11 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         quadtree = buildTree(positions, masses);
         // copy it to gpu
         cudaMemcpy( quadtree_d, quadtree.data(), quadtree.size() * sizeof(Quadrant), cudaMemcpyHostToDevice);
+
+        if (step == 0)
+            TraverseTreeToFile(0, tree_file_init, positions);
+        else if (step == N_SIMULATIONS - 1)
+            TraverseTreeToFile(0, tree_file_final, positions);
 
         computeForcesGpu<<<dimGrid, dimBlock>>>(positions_d, masses_d, forces_d, quadtree_d);
         cudaDeviceSynchronize();
@@ -863,7 +876,7 @@ int main() {
 
     auto start_gpu = std::chrono::high_resolution_clock::now();
 
-    //runSimulationGpu(masses, positions_gpu, velocities);
+    runSimulationGpu(masses, positions_gpu, velocities);
     
     auto end_gpu = std::chrono::high_resolution_clock::now();
     auto duration_gpu = std::chrono::duration_cast<std::chrono::milliseconds>(end_gpu - start_gpu);
