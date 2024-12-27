@@ -12,7 +12,7 @@
 
 // parameters
 const double G = 6.67e-11;
-const int N_BODIES = 1000;
+const int N_BODIES = 1024;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
 const int N_SIMULATIONS = 100;
@@ -700,7 +700,7 @@ void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities
     double absolute_t = 0.0;
 
     savePositions(output_str, positions, absolute_t);
-    printBodies(masses, positions, velocities);
+    //printBodies(masses, positions, velocities);
 
     auto start = std::chrono::high_resolution_clock::now();
     
@@ -714,11 +714,11 @@ void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities
 
         quadtree = buildTree(positions, masses);
 
-        if(step == 0){//N_SIMULATIONS - 1) {
+        /*if(step == 0){//N_SIMULATIONS - 1) {
             auto end = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
             std::cout <<std::endl << "CPU: Building tree took " << duration.count() << " milliseconds." << std::endl;
-        }
+        }*/
         
         // Write the quadtree to a file for visualization
         if (step == 0)
@@ -730,41 +730,29 @@ void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities
             start = std::chrono::high_resolution_clock::now();
         
         computeForces(positions, masses, forces);
-
-        /*if (step == 0 + 45)
-            forces_cpu = forces;*/
         
-        if(step == 0){//N_SIMULATIONS - 1) {
+        /*if(step == 0){//N_SIMULATIONS - 1) {
             auto end = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
             std::cout <<std::endl << "CPU: Force computations took " << duration.count() << " milliseconds." << std::endl;
-        }
+        }*/
         
         if(step == 0)//N_SIMULATIONS - 1)
             start = std::chrono::high_resolution_clock::now();
 
         updateAccelerations(forces, masses, accelerations);
-
-        /*if (step == 0 + 45) {
-            vel_init_cpu = velocities;
-        }*/
         
         updateVelocities(velocities, accelerations, DELTA_T);
         
         updatePositions(positions, velocities, DELTA_T);
 
-         if(step == 0){//N_SIMULATIONS - 1) {
+        /*if(step == 0){//N_SIMULATIONS - 1) {
             auto end = std::chrono::high_resolution_clock::now();
             auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
             std::cout <<std::endl << "CPU: The rest took " << duration.count() << " milliseconds." << std::endl;
-        }
+        }*/
 
         savePositions(output_str, positions, absolute_t);
-        /*if (step == 0 + 45) {
-            pos_cpu = positions;
-            acc_cpu = accelerations;
-            vel_cpu = velocities;
-        }*/
     }
     
     positions_file << output_str;
@@ -817,34 +805,24 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
 
         computeForcesGpu<<<dimGrid, dimBlock>>>(positions_d, masses_d, forces_d, quadtree_d);
         cudaDeviceSynchronize();
-
-        /*if (step == 0 + 45) {
-            cudaMemcpy( forces_gpu.data(), forces_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
-        }*/
         updateAccelerationsGpu<<<dimGrid, dimBlock>>>(forces_d, masses_d, accelerations_d);
         cudaDeviceSynchronize();
-        /*if (step == 0 + 45) {
-            cudaMemcpy( vel_init_gpu.data(), velocities_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
-        }*/
         updateVelocitiesGpu<<<dimGrid, dimBlock>>>(velocities_d, accelerations_d, DELTA_T);
         cudaDeviceSynchronize();
         updatePositionsGpu<<<dimGrid, dimBlock>>>(positions_d, velocities_d, DELTA_T);
         cudaDeviceSynchronize();
-        /*if (step == 0 + 45) {
-            cudaMemcpy( pos_gpu.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
-            cudaMemcpy( acc_gpu.data(), accelerations_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
-            cudaMemcpy( vel_gpu.data(), velocities_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
-        }*/
+        // needed for next iterations's tree creation on cpu
         cudaMemcpy( positions.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
     }
-    
-    //cudaMemcpy( positions.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
 
     cudaFree(masses_d);
     cudaFree(positions_d);
     cudaFree(velocities_d);
     cudaFree(accelerations_d);
     cudaFree(forces_d);
+
+    tree_file_init.close();
+    tree_file_final.close();
 }
 
 void checkEqual(const auto& first, const auto& second, const std::string& name) {
@@ -921,22 +899,6 @@ int main() {
     std::cout << "GPU computation took " << duration_gpu.count() << " milliseconds." << std::endl;
 
     std::cout<<std::endl<<std::endl;
-
-    //debug
-    /*
-    checkEqual(forces_cpu, forces_gpu, "step 0 forces");
-    checkEqual(acc_cpu, acc_gpu, "step 0 accelerations");
-    checkEqual(vel_init_cpu, vel_init_gpu, "step init velocities");
-    checkEqual(vel_cpu, vel_gpu, "step 0 velocities");
-    std::cout<<std::endl;
-    checkEqual(pos_cpu, pos_gpu, "step 0 positions");
-    */
-    /*for (int i = 0; i < 20; ++i) { 
-        for (int j = 0; j < N_DIM; ++j) { 
-            std::cout << "forces_cpu[" << i << "][" << j << "] = " << forces_cpu[i][j] << std::endl;
-            std::cout << "forces_gpu[" << i << "][" << j << "] = " << forces_gpu[i][j] << std::endl;
-        }
-    }*/
 
     return 0;
 }
