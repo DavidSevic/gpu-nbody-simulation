@@ -63,3 +63,11 @@ We will concider 4*n_bodies to be the practical limit of the tree which is relev
 beggining of the simulation, and the reason it is 4 is becasue 4 is the branching factor 
 of quadtree and the initial posisitons are unifrmly distributed, making the tree balanced 
 with each body being in a leaf
+
+80 * 1024 threads, 10 simulation:
+barnes-hut basic shared mem ~ 1700ms
+naive global ~ 4000ms
+
+40 * 1024 threads, 10 simulations
+barnes-hut basic shared mem ~ 1700ms
+naive global ~ 21000ms

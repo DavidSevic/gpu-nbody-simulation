@@ -11,12 +11,24 @@
 #include <curand_kernel.h>
 #include <sstream>
 
+#define CUDA_CHECK_ERROR(call)                                     \
+    do {                                                           \
+        cudaError_t err = call;                                    \
+        if (err != cudaSuccess) {                                  \
+            std::cerr << "CUDA Error: " << cudaGetErrorString(err) \
+                      << " (Error Code: " << err << ")"           \
+                      << " at " << __FILE__ << ":" << __LINE__    \
+                      << std::endl;                                \
+            exit(EXIT_FAILURE);                                    \
+        }                                                          \
+    } while (0)
+
 // parameters
 const double G = 6.67e-11;
-const int N_BODIES = 1024 * 8;
+const int N_BODIES = 1024 * 40;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
-const int N_SIMULATIONS = 100;
+const int N_SIMULATIONS = 10;
 const double LOWER_M = 1e-1;
 const double HIGHER_M = 5e-1;
 const double LOWER_P = -1e-1;
@@ -633,7 +645,7 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
 
     double pos_i[2] = {positions[idx * 2 + 0], positions[idx * 2 + 1]};
 
-    // max size of the stack is the max depth of the quadtree
+    // max size of the stack is the max depth of the quadtree * 3
     int nodeStack[QUADTREE_MAX_DEPTH * 3];
     int stack_top = -1;
 
@@ -901,11 +913,6 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     cudaMemcpy( positions_d, positions.data(), N_BODIES * N_DIM * sizeof(double), cudaMemcpyHostToDevice);
     cudaMemcpy( velocities_d, velocities.data(), N_BODIES * N_DIM * sizeof(double), cudaMemcpyHostToDevice);
 
-    int blockSize = (N_BODIES <= MAX_BLOCK_SIZE) ? N_BODIES : MAX_BLOCK_SIZE;
-
-    dim3 dimBlock(blockSize);
-	dim3 dimGrid((N_BODIES + blockSize - 1) / blockSize);
-
     double absolute_t = 0.0;
     
     for (int step = 0; step < N_SIMULATIONS; ++step) {
@@ -915,7 +922,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         quadtree = buildTree(positions, masses);
         
         //debug
-        std::cout<<"quadtree size: "<<quadtree.size();
+        //std::cout<<"quadtree size: "<<quadtree.size();
         if (step == 0)
             TraverseTreeToFile(0, tree_file_init, positions);
         else if (step == N_SIMULATIONS - 1)
@@ -926,22 +933,39 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
 
         // calculate the quadtree size
         int quadtreeMemSize = quadtree.size() * sizeof(Quadrant);
-        std::cout<<", memory: "<<quadtreeMemSize / 1024<<" kB"<<std::endl;
+        ////std::cout<<", memory: "<<quadtreeMemSize / 1024<<" kB"<<std::endl;
 
         // use shared memory if tree can fit in it
         int sharedMemSize = quadtreeMemSize <= MAX_SHARED_MEM_PER_BLOCK_B ? quadtreeMemSize : 0;
-        std::cout<<"shared memory used: "<< (sharedMemSize > 0) <<std::endl;
+        //std::cout<<"shared memory used: "<< (sharedMemSize > 0) <<std::endl;
         // dodaj blocksize menjanje u zavisnoti od sm limita
 
+        int blockSize = 0;
+        if (sharedMemSize == 0) {
+            blockSize = (N_BODIES <= MAX_BLOCK_SIZE) ? N_BODIES : MAX_BLOCK_SIZE;
+        } else {
+            // should depend on SM specs, actually looks like it MUST
+            blockSize = 512;
+        }
+
+        dim3 dimBlock(blockSize);
+        dim3 dimGrid((N_BODIES + blockSize - 1) / blockSize);
+
+        //std::cout<<"number of blocks: "<< (N_BODIES + blockSize - 1) / blockSize <<std::endl;
+
         // pass quadtree memory size for dynamic allocation of shared memory
-        computeForcesGpu<<<dimGrid, dimBlock, sharedMemSize>>>(positions_d, masses_d, forces_d, quadtree_d, quadtree.size(), sharedMemSize > 0);
-        cudaError_t err = cudaGetLastError();
+        computeForcesGpu<<<dimGrid, dimBlock, sharedMemSize>>>(positions_d, masses_d, forces_d, quadtree_d, quadtree.size(), sharedMemSize > 0);   
+        cudaDeviceSynchronize();
+        
+        CUDA_CHECK_ERROR(cudaGetLastError());
+        /*cudaError_t err = cudaGetLastError();
         if (err != cudaSuccess) {
             std::cout<<"cuda error"<<std::endl;
             break;
-        }
-        //debug
-        /*if (step == 0) {
+        }*/
+
+                //debug
+        /*if (step == 10) {
             Forces fff;
             cudaMemcpy( fff.data(), forces_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
             for (size_t i = 0; i < 220; ++i) {
@@ -957,8 +981,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
             std::cout<<"forces[2][0]: "<<fff[2][0]<<std::endl;
             std::cout<<"forces[2][1]: "<<fff[2][1]<<std::endl;
         }*/
-        
-        cudaDeviceSynchronize();
+
         updateAccelerationsGpu<<<dimGrid, dimBlock>>>(forces_d, masses_d, accelerations_d);
         cudaDeviceSynchronize();
         updateVelocitiesGpu<<<dimGrid, dimBlock>>>(velocities_d, accelerations_d, DELTA_T);
@@ -1029,7 +1052,7 @@ int main() {
 
     auto start_cpu = std::chrono::high_resolution_clock::now();
 
-    //runSimulationCpu(masses, positions_cpu, velocities);
+    runSimulationCpu(masses, positions_cpu, velocities);
 
     auto end_cpu = std::chrono::high_resolution_clock::now();
     auto duration_cpu = std::chrono::duration_cast<std::chrono::milliseconds>(end_cpu - start_cpu);
