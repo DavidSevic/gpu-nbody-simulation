@@ -43,3 +43,23 @@ Max size of stack is changed to max_depth * 3, because in worst case scenario we
 The results are not completely pricise, e.g. with 1000 bodies, they start to diviate slightly around 45th iteration and then the changes get bigger and bigger. but the final trees are nearly identical
 
 Stack in kernel code is possibly fitting in register memory which is the fastest.
+
+Device Name: Tesla T4
+Shared Memory per SM: 64 KB
+Maximum Shared Memory per Block: 48 KB
+Shared Memory Available for Dynamic Allocation: 64 K
+Number of SMs: 40
+
+Challenge: Quadtree can be potentionally large, depending on the max_depth, and cant fit into shared memory.
+Possible solutions:
+    - lower max_depth -> leads to less size and less acurracy
+    - use float instead of double -> halves the size but lower acurracy
+    - calculate quadrant bounds on the fly instead of keeping 4 values for each quadrant -> lowers size but increases computation
+
+The tree is actually far from its theoretical maximum size - 4^max_depth, and in the initial iteration is roughly 3 * n_bodies 
+and later on gets much smaller, so in pracrise, in the first iteration it will not fit into shared memory, but after it will.
+
+We will concider 4*n_bodies to be the practical limit of the tree which is relevant in the 
+beggining of the simulation, and the reason it is 4 is becasue 4 is the branching factor 
+of quadtree and the initial posisitons are unifrmly distributed, making the tree balanced 
+with each body being in a leaf

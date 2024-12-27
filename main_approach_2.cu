@@ -9,6 +9,7 @@
 #include <string>
 #include <stack>
 #include <curand_kernel.h>
+#include <sstream>
 
 // parameters
 const double G = 6.67e-11;
@@ -59,7 +60,9 @@ const int QUADTREE_MAX_SIZE = static_cast<int>(pow(4, QUADTREE_MAX_DEPTH));
 using Quadrant = std::array<double, QUADRANT_SIZE>;
 std::vector<Quadrant> quadtree;
 
-const int MAX_BLOCK_SIZE = 1024; // limit for threads in CUDA
+const int MAX_BLOCK_SIZE = 128; // physical limit is 1024, but smaller block sizes increase SM occupancy and enhance the performance
+const int MAX_SHARED_MEM_PER_BLOCK_KB = 48;
+const int MAX_SHARED_MEM_PER_SM_KB = 64;
 
 double generateRandom(double lower, double upper) {
     return lower + static_cast<double>(std::rand()) / RAND_MAX * (upper - lower);
@@ -84,6 +87,66 @@ double generateLogRandom(double lower, double upper) {
     return std::pow(10, std::log10(lower) + static_cast<double>(std::rand()) / RAND_MAX * (std::log10(upper) - std::log10(lower)));
 }
 
+void loadSimulationDataFromText(const std::string& massesFile,
+                                 const std::string& positionsFile,
+                                 const std::string& velocitiesFile,
+                                 size_t n_bodies,
+                                 Masses& masses,
+                                 Positions& positions,
+                                 Velocities& velocities) {
+    if (n_bodies > N_BODIES) {
+        throw std::out_of_range("Requested number of bodies exceeds N_BODIES.");
+    }
+
+    // Helper lambda to load masses
+    auto loadMasses = [&](const std::string& filename, Masses& masses) {
+        std::ifstream ifs(filename);
+        if (!ifs) {
+            throw std::runtime_error("Failed to open file: " + filename);
+        }
+        std::string line;
+        for (size_t i = 0; i < n_bodies; ++i) {
+            if (!std::getline(ifs, line)) {
+                throw std::runtime_error("Not enough mass entries in file: " + filename);
+            }
+            masses[i] = std::stod(line);
+        }
+        ifs.close();
+    };
+
+    // Helper lambda to load vectors
+    auto loadVectors = [&](const std::string& filename, auto& vectors) {
+        std::ifstream ifs(filename);
+        if (!ifs) {
+            throw std::runtime_error("Failed to open file: " + filename);
+        }
+        std::string line;
+        for (size_t i = 0; i < n_bodies; ++i) {
+            if (!std::getline(ifs, line)) {
+                throw std::runtime_error("Not enough vector entries in file: " + filename);
+            }
+            std::istringstream iss(line);
+            for (size_t dim = 0; dim < N_DIM; ++dim) {
+                if (!(iss >> vectors[i][dim])) {
+                    throw std::runtime_error("Failed to parse vector component in file: " + filename);
+                }
+            }
+        }
+        ifs.close();
+    };
+
+    // Load masses
+    loadMasses(massesFile, masses);
+
+    // Load positions
+    loadVectors(positionsFile, positions);
+
+    // Load velocities
+    loadVectors(velocitiesFile, velocities);
+
+    std::cout << "Loaded " << n_bodies << " bodies from text files." << std::endl;
+}
+
 __global__ void initializeCurandStates(curandState* states, unsigned long seed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -93,9 +156,22 @@ __global__ void initializeCurandStates(curandState* states, unsigned long seed) 
     curand_init(seed, idx, 0, &states[idx]);
 }
 
-void initializeMasses(Masses& masses, double LOWER_M, double HIGHER_M) {
+void initializeMasses(Masses& masses, double LOWER_M, double HIGHER_M,
+                     bool saveToFile = false, const std::string& filename = "masses_init.txt") {
     for (double& mass : masses) {
         mass = generateLogRandom(LOWER_M, HIGHER_M);
+    }
+
+    if (saveToFile) {
+        std::ofstream ofs(filename);
+        if (!ofs) {
+            throw std::runtime_error("Failed to open file for writing masses.");
+        }
+        for (const double& mass : masses) {
+            ofs << mass << "\n";
+        }
+        ofs.close();
+        std::cout << "Masses saved to " << filename << std::endl;
     }
 }
 
@@ -109,11 +185,26 @@ __global__ void initializeMassesGpu(double* masses, double lower, double higher,
     masses[idx] = generateRandomGpu(lower, higher, &states[idx]);
 }
 
-void initializeVectors(Positions& vectors, double lower, double upper) {
+void initializeVectors(Positions& vectors, double lower, double upper,
+                      bool saveToFile = false, const std::string& filename = "vectors_init.txt") {
     for (auto& vector : vectors) {
         for (double& component : vector) {
             component = generateRandom(lower, upper);
         }
+    }
+
+    if (saveToFile) {
+        std::ofstream ofs(filename);
+        if (!ofs) {
+            throw std::runtime_error("Failed to open file for writing vectors.");
+        }
+        for (const Vector& vector : vectors) {
+            for (size_t i = 0; i < N_DIM; ++i) {
+                ofs << vector[i] << (i < N_DIM - 1 ? " " : "\n");
+            }
+        }
+        ofs.close();
+        std::cout << "Vectors saved to " << filename << std::endl;
     }
 }
 
@@ -796,6 +887,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         // build the tree on cpu
         quadtree = buildTree(positions, masses);
         // copy it to gpu
+        std::cout<<"quadtree size: "<<quadtree.size()<<std::endl;
         cudaMemcpy( quadtree_d, quadtree.data(), quadtree.size() * sizeof(Quadrant), cudaMemcpyHostToDevice);
 
         if (step == 0)
@@ -860,12 +952,14 @@ int main() {
     Velocities velocities;
 
     // initialization
-    initializeGpu(masses, positions, velocities);
+    //initializeGpu(masses, positions, velocities);
     
-    /*initializeMasses(masses, LOWER_M, HIGHER_M);
-    initializeVectors(positions, LOWER_P, HIGHER_P);
-    initializeVectors(velocities, LOWER_V, HIGHER_v);
-    */
+    //initializeMasses(masses, LOWER_M, HIGHER_M, true, "masses_init.txt");
+    //initializeVectors(positions, LOWER_P, HIGHER_P, true, "positions_init.txt");
+    //initializeVectors(velocities, LOWER_V, HIGHER_v, true, "velocities_init.txt");
+
+    loadSimulationDataFromText("masses_init.txt", "positions_init.txt", "velocities_init.txt",
+                                   N_BODIES, masses, positions, velocities);
 
     // cpu simulation run
 
@@ -873,7 +967,7 @@ int main() {
 
     auto start_cpu = std::chrono::high_resolution_clock::now();
 
-    runSimulationCpu(masses, positions_cpu, velocities);
+    //runSimulationCpu(masses, positions_cpu, velocities);
 
     auto end_cpu = std::chrono::high_resolution_clock::now();
     auto duration_cpu = std::chrono::duration_cast<std::chrono::milliseconds>(end_cpu - start_cpu);
