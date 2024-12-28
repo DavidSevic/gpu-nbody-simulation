@@ -72,3 +72,34 @@ naive global ~ 4000ms
 barnes-hut basic shared mem ~ 1700ms
 naive global ~ 21000ms
 barnes-hut cpu ~ 22430ms
+
+
+
+new correct:
+
+when using shared memory:
+
+8 is slowest
+16 is faster
+32 is faster
+64 is faster
+128 is the fastest
+all higher same as 128
+
+for global memory:
+speeding up to 64 and then the same
+
+Bank conflicts removal:
+- the removal it self did not introduce any speed up, until the blocksize was dropped. 
+  and at 32, the computation time for force calculation in step=1 for 40 * 1024 threads went from 7ms to 0ms.
+- so now if we turnoff the shared mem, this same computation is 7ms and if we turn on shared mem its 0ms. which is a huge improvement.
+
+so now at 40 * 1024 threads, 10 simulations: 
+cpu: ~ 4000ms
+gpu: ~ 25ms
+speedup: ~ x 160 
+(important computation)
+
+next steps: 
+introduce shared memory (if it makes sense) to updating acc, vel, pos
+introduce option to use less threads than bodies

@@ -28,7 +28,7 @@ const double G = 6.67e-11;
 const int N_BODIES = 1024 * 40;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
-const int N_SIMULATIONS = 2;
+const int N_SIMULATIONS = 10;
 const double LOWER_M = 1e-1;
 const double HIGHER_M = 5e-1;
 const double LOWER_P = -1e-1;
@@ -75,6 +75,7 @@ std::vector<Quadrant> quadtree;
 const int MAX_BLOCK_SIZE = 1024; // physical limit is 1024, but smaller block sizes increase SM occupancy and enhance the performance
 const int MAX_SHARED_MEM_PER_BLOCK_B = 48 * 1024;
 const int MAX_SHARED_MEM_PER_SM_B = 64 * 1024;
+const int SHARED_MEM_BANKS_NUM = 32;
 
 std::chrono::milliseconds::rep cpu_important_duration = 0;
 std::chrono::milliseconds::rep gpu_important_duration = 0;
@@ -611,6 +612,8 @@ void computeForces(const Positions& positions,
     } // end for each body
 }
 
+
+
 __global__ void computeForcesGpu(double* positions, double* masses, double* forces, double* globalMemQuadtree, int quadtreeNumElem, bool useSharedMem) {
     
     extern __shared__ double sharedMemQuadtree[];
@@ -625,18 +628,18 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
     if (useSharedMem) {
 
         for (int i = threadIdx.x; i < quadtreeNumElem; i += blockDim.x) {
-            sharedMemQuadtree[i * QUADRANT_SIZE + CHILDREN_0] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_0];
-            sharedMemQuadtree[i * QUADRANT_SIZE + CHILDREN_1] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_1];
-            sharedMemQuadtree[i * QUADRANT_SIZE + CHILDREN_2] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_2];
-            sharedMemQuadtree[i * QUADRANT_SIZE + CHILDREN_3] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_3];
-            sharedMemQuadtree[i * QUADRANT_SIZE + CENTER_OF_MASS_X] = globalMemQuadtree[i * QUADRANT_SIZE + CENTER_OF_MASS_X];
-            sharedMemQuadtree[i * QUADRANT_SIZE + CENTER_OF_MASS_Y] = globalMemQuadtree[i * QUADRANT_SIZE + CENTER_OF_MASS_Y];
-            sharedMemQuadtree[i * QUADRANT_SIZE + TOTAL_MASS] = globalMemQuadtree[i * QUADRANT_SIZE + TOTAL_MASS];
-            sharedMemQuadtree[i * QUADRANT_SIZE + X_MIN] = globalMemQuadtree[i * QUADRANT_SIZE + X_MIN];
-            sharedMemQuadtree[i * QUADRANT_SIZE + X_MAX] = globalMemQuadtree[i * QUADRANT_SIZE + X_MAX];
-            sharedMemQuadtree[i * QUADRANT_SIZE + Y_MIN] = globalMemQuadtree[i * QUADRANT_SIZE + Y_MIN];
-            sharedMemQuadtree[i * QUADRANT_SIZE + Y_MAX] = globalMemQuadtree[i * QUADRANT_SIZE + Y_MAX];
-            sharedMemQuadtree[i * QUADRANT_SIZE + PARTICLE_INDEX] = globalMemQuadtree[i * QUADRANT_SIZE + PARTICLE_INDEX];
+            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CHILDREN_0] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_0];
+            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CHILDREN_1] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_1];
+            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CHILDREN_2] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_2];
+            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CHILDREN_3] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_3];
+            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CENTER_OF_MASS_X] = globalMemQuadtree[i * QUADRANT_SIZE + CENTER_OF_MASS_X];
+            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CENTER_OF_MASS_Y] = globalMemQuadtree[i * QUADRANT_SIZE + CENTER_OF_MASS_Y];
+            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * TOTAL_MASS] = globalMemQuadtree[i * QUADRANT_SIZE + TOTAL_MASS];
+            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * X_MIN] = globalMemQuadtree[i * QUADRANT_SIZE + X_MIN];
+            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * X_MAX] = globalMemQuadtree[i * QUADRANT_SIZE + X_MAX];
+            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * Y_MIN] = globalMemQuadtree[i * QUADRANT_SIZE + Y_MIN];
+            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * Y_MAX] = globalMemQuadtree[i * QUADRANT_SIZE + Y_MAX];
+            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * PARTICLE_INDEX] = globalMemQuadtree[i * QUADRANT_SIZE + PARTICLE_INDEX];
         }
 
         __syncthreads();
@@ -667,8 +670,12 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
 
         //const Quadrant& node = quadtree[nodeIndex];
         //printf("attemp: nodeIndex: %d \n", nodeIndex);
-        double* node = &quadtree[nodeIndex * QUADRANT_SIZE];
-        //printf("success\n", nodeIndex);
+        //double* node = &quadtree[nodeIndex];// * QUADRANT_SIZE];
+        double* node = useSharedMem
+            ? &quadtree[nodeIndex]
+            : &quadtree[nodeIndex * QUADRANT_SIZE];
+
+        const int ACCESS_INDEX = useSharedMem ? SHARED_MEM_BANKS_NUM : 1;
 
         /*if (nodeIndex >= quadtreeNumElem) {
             printf("If you are reading this, something is wrong. (%d / %d)\n", nodeIndex, quadtreeNumElem);
@@ -676,29 +683,29 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
         }*/
 
         // if this node has zero mass, skip
-        double nodeMass = node[TOTAL_MASS];
+        double nodeMass = node[ACCESS_INDEX * TOTAL_MASS];
         if (nodeMass <= 1e-15) {
             continue;
         }
 
         // if this node is a leaf with a single occupant
-        int occupantIdx = static_cast<int>(node[PARTICLE_INDEX]);
-        bool isLeaf = (node[CHILDREN_0] == -1 && 
-                        node[CHILDREN_1] == -1 &&
-                        node[CHILDREN_2] == -1 &&
-                        node[CHILDREN_3] == -1);
+        int occupantIdx = static_cast<int>(node[ACCESS_INDEX * PARTICLE_INDEX]);
+        bool isLeaf = (node[ACCESS_INDEX * CHILDREN_0] == -1 && 
+                        node[ACCESS_INDEX * CHILDREN_1] == -1 &&
+                        node[ACCESS_INDEX * CHILDREN_2] == -1 &&
+                        node[ACCESS_INDEX * CHILDREN_3] == -1);
 
         // compute displacement from body idx to this node's center of mass
         double displacement[2] = {0, 0};
-        displacement[0] = node[CENTER_OF_MASS_X] - pos_i[0];
-        displacement[1] = node[CENTER_OF_MASS_Y] - pos_i[1];
+        displacement[0] = node[ACCESS_INDEX * CENTER_OF_MASS_X] - pos_i[0];
+        displacement[1] = node[ACCESS_INDEX * CENTER_OF_MASS_Y] - pos_i[1];
 
         double distance_sq = displacement[0]*displacement[0] + displacement[1]*displacement[1];
         double distance    = std::sqrt(distance_sq) + 1e-15; // small offset to avoid division by zero
 
         // approximate node size
-        double dx = node[X_MAX] - node[X_MIN];
-        double dy = node[Y_MAX] - node[Y_MIN];
+        double dx = node[ACCESS_INDEX * X_MAX] - node[ACCESS_INDEX * X_MIN];
+        double dy = node[ACCESS_INDEX * Y_MAX] - node[ACCESS_INDEX * Y_MIN];
         double node_size = (dx > dy) ? dx : dy;  // max dimension in 2D
 
         // Barnes-Hut criterion: if node is leaf OR size/distance < THETA
@@ -724,10 +731,10 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
         {
             for (int c = 0; c < 4; ++c)
             {
-                int childIdx = static_cast<int>(node[CHILDREN_0  + c]);
+                int childIdx = static_cast<int>(node[ACCESS_INDEX * (CHILDREN_0  + c)]);
                 if (childIdx != -1) {
                     if (!push(nodeStack, &stack_top, childIdx)) {
-                        //printf("Stack overflow while pushing child node %d on position %d. particle: %f. thread: %d\n", childIdx, c, node[PARTICLE_INDEX], idx);
+                        //printf("Stack overflow while pushing child node %d on position %d. particle: %f. thread: %d\n", childIdx, c, node[ACCESS_INDEX * PARTICLE_INDEX], idx);
                         /*printf("Stack overflow while pushing child node %f on position %d.\n"
                                 "Particle: %f\n"
                                 "Thread ID: %d\n"
@@ -735,19 +742,19 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
                                 "Center of Mass: (%f, %f)\n"
                                 "Total Mass: %f\n"
                                 "Bounding Box: X[min=%f, max=%f], Y[min=%f, max=%f]\n",
-                                node[CHILDREN_0  + c],         // Child Node Index
+                                node[ACCESS_INDEX * (CHILDREN_0  + c)],         // Child Node Index
                                 c,                // Position
-                                node[PARTICLE_INDEX], // Particle Value
+                                node[ACCESS_INDEX * PARTICLE_INDEX], // Particle Value
                                 idx,              // Thread ID
-                                node[CHILDREN_0], // Children 0
-                                node[CHILDREN_1], // Children 1
-                                node[CHILDREN_2], // Children 2
-                                node[CHILDREN_3], // Children 3
-                                node[CENTER_OF_MASS_X], // Center of Mass X
-                                node[CENTER_OF_MASS_Y], // Center of Mass Y
-                                node[TOTAL_MASS],       // Total Mass
-                                node[X_MIN], node[X_MAX], // X Bounding Box
-                                node[Y_MIN], node[Y_MAX]  // Y Bounding Box
+                                node[ACCESS_INDEX * CHILDREN_0], // Children 0
+                                node[ACCESS_INDEX * CHILDREN_1], // Children 1
+                                node[ACCESS_INDEX * CHILDREN_2], // Children 2
+                                node[ACCESS_INDEX * CHILDREN_3], // Children 3
+                                node[ACCESS_INDEX * CENTER_OF_MASS_X], // Center of Mass X
+                                node[ACCESS_INDEX * CENTER_OF_MASS_Y], // Center of Mass Y
+                                node[ACCESS_INDEX * TOTAL_MASS],       // Total Mass
+                                node[ACCESS_INDEX * X_MIN], node[ACCESS_INDEX * X_MAX], // X Bounding Box
+                                node[ACCESS_INDEX * Y_MIN], node[ACCESS_INDEX * Y_MAX]  // Y Bounding Box
                             );*/
 
                         break;
@@ -971,7 +978,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         }
         
         //debug
-        //std::cout<<"quadtree size: "<<quadtree.size();
+        std::cout<<"quadtree size: "<<quadtree.size()<<std::endl;
         if (step == 0)
             TraverseTreeToFile(0, tree_file_init, positions);
         else if (step == N_SIMULATIONS - 1)
@@ -990,15 +997,16 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         // use shared memory if tree can fit in it
         int sharedMemSize = quadtreeMemSize <= MAX_SHARED_MEM_PER_BLOCK_B ? quadtreeMemSize : 0;
         std::cout<<"shared memory used: "<< (sharedMemSize > 0) <<std::endl;
-        //std::cout<<"shared memory allocated: "<<sharedMemSize<<::std::endl;
+        std::cout<<"shared memory allocated (kB): "<<sharedMemSize / 1024<<::std::endl;
+
         //debug
         //sharedMemSize = 0;
 
         int blockSize = 0;
         if (sharedMemSize == 0) {
-            blockSize = 64;//(N_BODIES <= MAX_BLOCK_SIZE) ? N_BODIES : MAX_BLOCK_SIZE;
+            blockSize = 32; // similar performance when going up, but 32 might be the best
         } else {
-            blockSize = 128;
+            blockSize = 32; // same as warp, and shows best performance
         }
 
         //debug
@@ -1134,7 +1142,7 @@ int main() {
 
     auto start_cpu = std::chrono::high_resolution_clock::now();
 
-    //runSimulationCpu(masses, positions_cpu, velocities);
+    runSimulationCpu(masses, positions_cpu, velocities);
 
     auto end_cpu = std::chrono::high_resolution_clock::now();
     auto duration_cpu = std::chrono::duration_cast<std::chrono::milliseconds>(end_cpu - start_cpu);
