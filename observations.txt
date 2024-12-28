@@ -71,3 +71,4 @@ naive global ~ 4000ms
 40 * 1024 threads, 10 simulations
 barnes-hut basic shared mem ~ 1700ms
 naive global ~ 21000ms
+barnes-hut cpu ~ 22430ms

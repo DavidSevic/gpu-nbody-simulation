@@ -25,7 +25,7 @@
 
 // parameters
 const double G = 6.67e-11;
-const int N_BODIES = 1024 * 40;
+const int N_BODIES = 1024 * 20;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
 const int N_SIMULATIONS = 10;
@@ -618,10 +618,10 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
         return;
 
     double* quadtree = globalMemQuadtree;
-    
+    //printf(" shared started ");
     if (useSharedMem) {
 
-        for (int i = idx; i < quadtreeNumElem; i += blockDim.x) {
+        for (int i = blockIdx.x; i < quadtreeNumElem; i += blockDim.x) {
             sharedMemQuadtree[i * QUADRANT_SIZE + CHILDREN_0] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_0];
             sharedMemQuadtree[i * QUADRANT_SIZE + CHILDREN_1] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_1];
             sharedMemQuadtree[i * QUADRANT_SIZE + CHILDREN_2] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_2];
@@ -640,7 +640,7 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
 
         quadtree = sharedMemQuadtree;
     }
-
+    //printf(" shared finished ");
     double sum[2] = {0, 0};
 
     double pos_i[2] = {positions[idx * 2 + 0], positions[idx * 2 + 1]};
@@ -663,7 +663,14 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
         }
 
         //const Quadrant& node = quadtree[nodeIndex];
+        //printf("attemp: nodeIndex: %d \n", nodeIndex);
         double* node = &quadtree[nodeIndex * QUADRANT_SIZE];
+        //printf("success\n", nodeIndex);
+
+        /*if (nodeIndex >= quadtreeNumElem) {
+            //printf("If you are reading this, something is wrong. (%d / %d)\n", nodeIndex, quadtreeNumElem);
+            continue;
+        }*/
 
         // if this node has zero mass, skip
         double nodeMass = node[TOTAL_MASS];
@@ -717,7 +724,29 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
                 int childIdx = static_cast<int>(node[CHILDREN_0  + c]);
                 if (childIdx != -1) {
                     if (!push(nodeStack, &stack_top, childIdx)) {
-                        printf("Stack overflow while pushing child node %d.\n", childIdx);
+                        //printf("Stack overflow while pushing child node %d on position %d. particle: %f. thread: %d\n", childIdx, c, node[PARTICLE_INDEX], idx);
+                        /*printf("Stack overflow while pushing child node %f on position %d.\n"
+                                "Particle: %f\n"
+                                "Thread ID: %d\n"
+                                "Children: [%d, %d, %d, %d]\n"
+                                "Center of Mass: (%f, %f)\n"
+                                "Total Mass: %f\n"
+                                "Bounding Box: X[min=%f, max=%f], Y[min=%f, max=%f]\n",
+                                node[CHILDREN_0  + c],         // Child Node Index
+                                c,                // Position
+                                node[PARTICLE_INDEX], // Particle Value
+                                idx,              // Thread ID
+                                node[CHILDREN_0], // Children 0
+                                node[CHILDREN_1], // Children 1
+                                node[CHILDREN_2], // Children 2
+                                node[CHILDREN_3], // Children 3
+                                node[CENTER_OF_MASS_X], // Center of Mass X
+                                node[CENTER_OF_MASS_Y], // Center of Mass Y
+                                node[TOTAL_MASS],       // Total Mass
+                                node[X_MIN], node[X_MAX], // X Bounding Box
+                                node[Y_MIN], node[Y_MAX]  // Y Bounding Box
+                            );*/
+
                         break;
                     }
                 }
@@ -922,7 +951,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         quadtree = buildTree(positions, masses);
         
         //debug
-        //std::cout<<"quadtree size: "<<quadtree.size();
+        std::cout<<"quadtree size: "<<quadtree.size();
         if (step == 0)
             TraverseTreeToFile(0, tree_file_init, positions);
         else if (step == N_SIMULATIONS - 1)
@@ -933,28 +962,27 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
 
         // calculate the quadtree size
         int quadtreeMemSize = quadtree.size() * sizeof(Quadrant);
-        ////std::cout<<", memory: "<<quadtreeMemSize / 1024<<" kB"<<std::endl;
+        std::cout<<", memory: "<<quadtreeMemSize / 1024<<" kB"<<std::endl;
 
         // use shared memory if tree can fit in it
         int sharedMemSize = quadtreeMemSize <= MAX_SHARED_MEM_PER_BLOCK_B ? quadtreeMemSize : 0;
-        //std::cout<<"shared memory used: "<< (sharedMemSize > 0) <<std::endl;
+        std::cout<<"shared memory used: "<< (sharedMemSize > 0) <<std::endl;
         // dodaj blocksize menjanje u zavisnoti od sm limita
 
         int blockSize = 0;
         if (sharedMemSize == 0) {
-            blockSize = (N_BODIES <= MAX_BLOCK_SIZE) ? N_BODIES : MAX_BLOCK_SIZE;
+            blockSize = 32;//(N_BODIES <= MAX_BLOCK_SIZE) ? N_BODIES : MAX_BLOCK_SIZE;
         } else {
-            // should depend on SM specs, actually looks like it MUST
-            blockSize = 512;
+            blockSize = 32;
         }
 
         dim3 dimBlock(blockSize);
         dim3 dimGrid((N_BODIES + blockSize - 1) / blockSize);
 
-        //std::cout<<"number of blocks: "<< (N_BODIES + blockSize - 1) / blockSize <<std::endl;
+        std::cout<<"number of blocks: "<< (N_BODIES + blockSize - 1) / blockSize <<std::endl;
 
         // pass quadtree memory size for dynamic allocation of shared memory
-        computeForcesGpu<<<dimGrid, dimBlock, sharedMemSize>>>(positions_d, masses_d, forces_d, quadtree_d, quadtree.size(), sharedMemSize > 0);   
+        computeForcesGpu<<<dimGrid, dimBlock, sharedMemSize * 2>>>(positions_d, masses_d, forces_d, quadtree_d, quadtree.size(), sharedMemSize > 0);   
         cudaDeviceSynchronize();
         
         CUDA_CHECK_ERROR(cudaGetLastError());
@@ -997,6 +1025,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     cudaFree(velocities_d);
     cudaFree(accelerations_d);
     cudaFree(forces_d);
+    cudaFree(quadtree_d);
 
     tree_file_init.close();
     tree_file_final.close();
@@ -1052,7 +1081,7 @@ int main() {
 
     auto start_cpu = std::chrono::high_resolution_clock::now();
 
-    runSimulationCpu(masses, positions_cpu, velocities);
+    //runSimulationCpu(masses, positions_cpu, velocities);
 
     auto end_cpu = std::chrono::high_resolution_clock::now();
     auto duration_cpu = std::chrono::duration_cast<std::chrono::milliseconds>(end_cpu - start_cpu);
