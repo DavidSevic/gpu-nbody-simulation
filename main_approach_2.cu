@@ -25,10 +25,10 @@
 
 // parameters
 const double G = 6.67e-11;
-const int N_BODIES = 1024 * 20;
+const int N_BODIES = 1024 * 40;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
-const int N_SIMULATIONS = 10;
+const int N_SIMULATIONS = 2;
 const double LOWER_M = 1e-1;
 const double HIGHER_M = 5e-1;
 const double LOWER_P = -1e-1;
@@ -75,6 +75,9 @@ std::vector<Quadrant> quadtree;
 const int MAX_BLOCK_SIZE = 1024; // physical limit is 1024, but smaller block sizes increase SM occupancy and enhance the performance
 const int MAX_SHARED_MEM_PER_BLOCK_B = 48 * 1024;
 const int MAX_SHARED_MEM_PER_SM_B = 64 * 1024;
+
+std::chrono::milliseconds::rep cpu_important_duration = 0;
+std::chrono::milliseconds::rep gpu_important_duration = 0;
 
 double generateRandom(double lower, double upper) {
     return lower + static_cast<double>(std::rand()) / RAND_MAX * (upper - lower);
@@ -621,7 +624,7 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
     //printf(" shared started ");
     if (useSharedMem) {
 
-        for (int i = blockIdx.x; i < quadtreeNumElem; i += blockDim.x) {
+        for (int i = threadIdx.x; i < quadtreeNumElem; i += blockDim.x) {
             sharedMemQuadtree[i * QUADRANT_SIZE + CHILDREN_0] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_0];
             sharedMemQuadtree[i * QUADRANT_SIZE + CHILDREN_1] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_1];
             sharedMemQuadtree[i * QUADRANT_SIZE + CHILDREN_2] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_2];
@@ -668,7 +671,7 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
         //printf("success\n", nodeIndex);
 
         /*if (nodeIndex >= quadtreeNumElem) {
-            //printf("If you are reading this, something is wrong. (%d / %d)\n", nodeIndex, quadtreeNumElem);
+            printf("If you are reading this, something is wrong. (%d / %d)\n", nodeIndex, quadtreeNumElem);
             continue;
         }*/
 
@@ -861,22 +864,24 @@ void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities
     //printBodies(masses, positions, velocities);
 
     auto start = std::chrono::high_resolution_clock::now();
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     
     for (int step = 0; step < N_SIMULATIONS; ++step) {
         absolute_t += DELTA_T;
 
         // create the quadtree
 
-        if(step == 0)//N_SIMULATIONS - 1)
+        if(step == 0 || step == N_SIMULATIONS - 1)
             start = std::chrono::high_resolution_clock::now();
 
         quadtree = buildTree(positions, masses);
 
-        /*if(step == 0){//N_SIMULATIONS - 1) {
-            auto end = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            std::cout <<std::endl << "CPU: Building tree took " << duration.count() << " milliseconds." << std::endl;
-        }*/
+        if(step == 0 || step == N_SIMULATIONS - 1) {
+            end = std::chrono::high_resolution_clock::now();
+            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            std::cout <<std::endl << "CPU: step "<<step<<": Building tree took " << duration.count() << " milliseconds." << std::endl;
+        }
         
         // Write the quadtree to a file for visualization
         if (step == 0)
@@ -884,18 +889,19 @@ void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities
         else if (step == N_SIMULATIONS - 1)
             TraverseTreeToFile(0, tree_file_final, positions);
 
-        if(step == 0)// N_SIMULATIONS - 1)
+        if(step == 0 || step == N_SIMULATIONS - 1)
             start = std::chrono::high_resolution_clock::now();
         
         computeForces(positions, masses, forces);
         
-        /*if(step == 0){//N_SIMULATIONS - 1) {
-            auto end = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            std::cout <<std::endl << "CPU: Force computations took " << duration.count() << " milliseconds." << std::endl;
-        }*/
+        if(step == 0 || step == N_SIMULATIONS - 1) {
+            end = std::chrono::high_resolution_clock::now();
+            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            cpu_important_duration += duration.count();
+            std::cout <<std::endl << "CPU: step "<<step<<": Force calculations took " << duration.count() << " milliseconds." << std::endl;
+        }
         
-        if(step == 0)//N_SIMULATIONS - 1)
+        if(step == 0 || step == N_SIMULATIONS - 1)
             start = std::chrono::high_resolution_clock::now();
 
         updateAccelerations(forces, masses, accelerations);
@@ -904,11 +910,12 @@ void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities
         
         updatePositions(positions, velocities, DELTA_T);
 
-        /*if(step == 0){//N_SIMULATIONS - 1) {
-            auto end = std::chrono::high_resolution_clock::now();
-            auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            std::cout <<std::endl << "CPU: The rest took " << duration.count() << " milliseconds." << std::endl;
-        }*/
+        if(step == 0 || step == N_SIMULATIONS - 1) {
+            end = std::chrono::high_resolution_clock::now();
+            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            cpu_important_duration += duration.count();
+            std::cout <<std::endl << "CPU: step "<<step<<": The rest took " << duration.count() << " milliseconds." << std::endl;
+        }
 
         savePositions(output_str, positions, absolute_t);
     }
@@ -943,15 +950,28 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     cudaMemcpy( velocities_d, velocities.data(), N_BODIES * N_DIM * sizeof(double), cudaMemcpyHostToDevice);
 
     double absolute_t = 0.0;
-    
+
+    auto start = std::chrono::high_resolution_clock::now();
+    auto end = std::chrono::high_resolution_clock::now();
+    auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+
     for (int step = 0; step < N_SIMULATIONS; ++step) {
         absolute_t += DELTA_T;
 
+        if(step == 0 || step == N_SIMULATIONS - 1)
+            start = std::chrono::high_resolution_clock::now();
+
         // build the tree on cpu
         quadtree = buildTree(positions, masses);
+
+        if(step == 0 || step == N_SIMULATIONS - 1) {
+            end = std::chrono::high_resolution_clock::now();
+            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            std::cout <<std::endl << "GPU: step "<<step<<": Building tree took " << duration.count() << " milliseconds." << std::endl;
+        }
         
         //debug
-        std::cout<<"quadtree size: "<<quadtree.size();
+        //std::cout<<"quadtree size: "<<quadtree.size();
         if (step == 0)
             TraverseTreeToFile(0, tree_file_init, positions);
         else if (step == N_SIMULATIONS - 1)
@@ -962,28 +982,48 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
 
         // calculate the quadtree size
         int quadtreeMemSize = quadtree.size() * sizeof(Quadrant);
-        std::cout<<", memory: "<<quadtreeMemSize / 1024<<" kB"<<std::endl;
+        //std::cout<<", memory: "<<quadtreeMemSize / 1024<<" kB"<<std::endl;
+        //std::cout<<", memory: "<<quadtreeMemSize<<" B"<<std::endl;
+        //std::cout<<", sizeof: "<<sizeof(quadtree)<<" B"<<std::endl;
+        //std::cout<<", sizeof(Quadrant): "<<sizeof(Quadrant)<<" B"<<std::endl;
 
         // use shared memory if tree can fit in it
         int sharedMemSize = quadtreeMemSize <= MAX_SHARED_MEM_PER_BLOCK_B ? quadtreeMemSize : 0;
         std::cout<<"shared memory used: "<< (sharedMemSize > 0) <<std::endl;
-        // dodaj blocksize menjanje u zavisnoti od sm limita
+        //std::cout<<"shared memory allocated: "<<sharedMemSize<<::std::endl;
+        //debug
+        //sharedMemSize = 0;
 
         int blockSize = 0;
         if (sharedMemSize == 0) {
-            blockSize = 32;//(N_BODIES <= MAX_BLOCK_SIZE) ? N_BODIES : MAX_BLOCK_SIZE;
+            blockSize = 64;//(N_BODIES <= MAX_BLOCK_SIZE) ? N_BODIES : MAX_BLOCK_SIZE;
         } else {
-            blockSize = 32;
+            blockSize = 128;
         }
+
+        //debug
+        //blockSize = 64;
+        //sharedMemSize = 0;
 
         dim3 dimBlock(blockSize);
         dim3 dimGrid((N_BODIES + blockSize - 1) / blockSize);
 
-        std::cout<<"number of blocks: "<< (N_BODIES + blockSize - 1) / blockSize <<std::endl;
+        //std::cout<<"number of blocks: "<< (N_BODIES + blockSize - 1) / blockSize <<std::endl;
+
+        
+        if(step == 0 || step == N_SIMULATIONS - 1)
+            start = std::chrono::high_resolution_clock::now();
 
         // pass quadtree memory size for dynamic allocation of shared memory
-        computeForcesGpu<<<dimGrid, dimBlock, sharedMemSize * 2>>>(positions_d, masses_d, forces_d, quadtree_d, quadtree.size(), sharedMemSize > 0);   
+        computeForcesGpu<<<dimGrid, dimBlock, sharedMemSize>>>(positions_d, masses_d, forces_d, quadtree_d, quadtree.size(), sharedMemSize > 0);   
         cudaDeviceSynchronize();
+
+        if(step == 0 || step == N_SIMULATIONS - 1) {
+            end = std::chrono::high_resolution_clock::now();
+            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            std::cout <<std::endl << "GPU: step "<<step<<": Force calculations took " << duration.count() << " milliseconds." << std::endl;
+            gpu_important_duration += duration.count();
+        }
         
         CUDA_CHECK_ERROR(cudaGetLastError());
         /*cudaError_t err = cudaGetLastError();
@@ -1010,12 +1050,25 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
             std::cout<<"forces[2][1]: "<<fff[2][1]<<std::endl;
         }*/
 
+        // OVDE POSEBAN BLOCKSIZE ZA OSTALE
+
+        if(step == 0 || step == N_SIMULATIONS - 1)
+            start = std::chrono::high_resolution_clock::now();
+
         updateAccelerationsGpu<<<dimGrid, dimBlock>>>(forces_d, masses_d, accelerations_d);
         cudaDeviceSynchronize();
         updateVelocitiesGpu<<<dimGrid, dimBlock>>>(velocities_d, accelerations_d, DELTA_T);
         cudaDeviceSynchronize();
         updatePositionsGpu<<<dimGrid, dimBlock>>>(positions_d, velocities_d, DELTA_T);
         cudaDeviceSynchronize();
+
+        if(step == 0 || step == N_SIMULATIONS - 1) {
+            end = std::chrono::high_resolution_clock::now();
+            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            gpu_important_duration += duration.count();
+            std::cout <<std::endl << "GPU: step "<<step<<": The rest took " << duration.count() << " milliseconds." << std::endl;
+        }
+
         // needed for next iterations's tree creation on cpu
         cudaMemcpy( positions.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
     }
@@ -1103,8 +1156,13 @@ int main() {
 
     std::cout<<std::endl<<std::endl;
 
-    std::cout << "CPU computation took " << duration_cpu.count() << " milliseconds." << std::endl;
-    std::cout << "GPU computation took " << duration_gpu.count() << " milliseconds." << std::endl;
+    std::cout << "CPU total computation took " << duration_cpu.count() << " milliseconds." << std::endl;
+    std::cout << "GPU total computation took " << duration_gpu.count() << " milliseconds." << std::endl;
+
+    std::cout<<std::endl<<std::endl;
+
+    std::cout << "CPU important computation took " << cpu_important_duration << " milliseconds." << std::endl;
+    std::cout << "GPU important computation took " << gpu_important_duration << " milliseconds." << std::endl;
 
     std::cout<<std::endl<<std::endl;
 
