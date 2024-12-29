@@ -91,7 +91,7 @@ speeding up to 64 and then the same
 
 Bank conflicts removal:
 - the removal it self did not introduce any speed up, until the blocksize was dropped. 
-  and at 32, the computation time for force calculation in step=1 for 40 * 1024 threads went from 7ms to 0ms.
+  and at 32, the computation time for force calculation in step=1 for 40 * 1024 threads went from 7ms to 300 micros.
 - so now if we turnoff the shared mem, this same computation is 7ms and if we turn on shared mem its 0ms. which is a huge improvement.
 
 so now at 40 * 1024 threads, 10 simulations: 
@@ -103,3 +103,18 @@ speedup: ~ x 160
 next steps: 
 introduce shared memory (if it makes sense) to updating acc, vel, pos
 introduce option to use less threads than bodies
+
+
+shared memory is not useful for updating acc,vel and pos, since these operations require only one read and one write, 
+and to load them into shared mem also takes one read and after one write
+
+but we will combine these three kernel functions into single one
+time before that (40 * 1024 threads):
+  - first iteration: 148 microseconds
+  - last iteration: 63 microseconds
+time after:
+  - first iteration: 115 microseconds
+  - last iteration: 35 microseconds
+
+For global memory, thre are no banks, but coalesced access is important. since all bodies are sequential in memory and threads acces them
+in the same way, no optimization is needed

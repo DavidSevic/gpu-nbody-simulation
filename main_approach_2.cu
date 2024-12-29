@@ -77,8 +77,8 @@ const int MAX_SHARED_MEM_PER_BLOCK_B = 48 * 1024;
 const int MAX_SHARED_MEM_PER_SM_B = 64 * 1024;
 const int SHARED_MEM_BANKS_NUM = 32;
 
-std::chrono::milliseconds::rep cpu_important_duration = 0;
-std::chrono::milliseconds::rep gpu_important_duration = 0;
+std::chrono::microseconds::rep cpu_important_duration = 0;
+std::chrono::microseconds::rep gpu_important_duration = 0;
 
 double generateRandom(double lower, double upper) {
     return lower + static_cast<double>(std::rand()) / RAND_MAX * (upper - lower);
@@ -829,6 +829,23 @@ __global__ void updatePositionsGpu(double* positions, double* velocities, double
     }
 }
 
+__global__ void updateAccVelPos(double* forces, double* masses, double* accelerations, double* velocities, double* positions, double DELTA_T) {
+    
+    int idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+    if (idx >= N_BODIES)
+        return;
+
+    accelerations[idx * 2 + 0] = forces[idx * 2 + 0] / masses[idx];
+    accelerations[idx * 2 + 1] = forces[idx * 2 + 1] / masses[idx];
+
+    velocities[idx * 2 + 0] += accelerations[idx * 2 + 0] * DELTA_T;
+    velocities[idx * 2 + 1] += accelerations[idx * 2 + 1] * DELTA_T;
+
+    positions[idx * 2 + 0] += velocities[idx * 2 + 0] * DELTA_T;
+    positions[idx * 2 + 1] += velocities[idx * 2 + 1] * DELTA_T;
+}
+
 void printBodies(const Masses& masses, const Positions& positions, const Velocities& velocities) {
     for (int i = 0; i < N_BODIES; ++i) {
         std::cout << "Body " << i << ":\n";
@@ -873,6 +890,7 @@ void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities
     auto start = std::chrono::high_resolution_clock::now();
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    auto duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     
     for (int step = 0; step < N_SIMULATIONS; ++step) {
         absolute_t += DELTA_T;
@@ -904,7 +922,8 @@ void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities
         if(step == 0 || step == N_SIMULATIONS - 1) {
             end = std::chrono::high_resolution_clock::now();
             duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            cpu_important_duration += duration.count();
+            duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+            cpu_important_duration += duration_micro.count();
             std::cout <<std::endl << "CPU: step "<<step<<": Force calculations took " << duration.count() << " milliseconds." << std::endl;
         }
         
@@ -919,9 +938,9 @@ void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities
 
         if(step == 0 || step == N_SIMULATIONS - 1) {
             end = std::chrono::high_resolution_clock::now();
-            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
             cpu_important_duration += duration.count();
-            std::cout <<std::endl << "CPU: step "<<step<<": The rest took " << duration.count() << " milliseconds." << std::endl;
+            std::cout <<std::endl << "CPU: step "<<step<<": The rest took " << duration_micro.count() << " microseconds." << std::endl;
         }
 
         savePositions(output_str, positions, absolute_t);
@@ -961,6 +980,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     auto start = std::chrono::high_resolution_clock::now();
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+    auto duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
 
     for (int step = 0; step < N_SIMULATIONS; ++step) {
         absolute_t += DELTA_T;
@@ -978,7 +998,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         }
         
         //debug
-        std::cout<<"quadtree size: "<<quadtree.size()<<std::endl;
+        //std::cout<<"quadtree size: "<<quadtree.size()<<std::endl;
         if (step == 0)
             TraverseTreeToFile(0, tree_file_init, positions);
         else if (step == N_SIMULATIONS - 1)
@@ -996,8 +1016,8 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
 
         // use shared memory if tree can fit in it
         int sharedMemSize = quadtreeMemSize <= MAX_SHARED_MEM_PER_BLOCK_B ? quadtreeMemSize : 0;
-        std::cout<<"shared memory used: "<< (sharedMemSize > 0) <<std::endl;
-        std::cout<<"shared memory allocated (kB): "<<sharedMemSize / 1024<<::std::endl;
+        //std::cout<<"shared memory used: "<< (sharedMemSize > 0) <<std::endl;
+        //std::cout<<"shared memory allocated (kB): "<<sharedMemSize / 1024<<::std::endl;
 
         //debug
         //sharedMemSize = 0;
@@ -1028,9 +1048,10 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
 
         if(step == 0 || step == N_SIMULATIONS - 1) {
             end = std::chrono::high_resolution_clock::now();
-            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            std::cout <<std::endl << "GPU: step "<<step<<": Force calculations took " << duration.count() << " milliseconds." << std::endl;
-            gpu_important_duration += duration.count();
+            //duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+            std::cout <<std::endl << "GPU: step "<<step<<": Force calculations took " << duration_micro.count() << " microseconds." << std::endl;
+            gpu_important_duration += duration_micro.count();
         }
         
         CUDA_CHECK_ERROR(cudaGetLastError());
@@ -1063,18 +1084,19 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         if(step == 0 || step == N_SIMULATIONS - 1)
             start = std::chrono::high_resolution_clock::now();
 
-        updateAccelerationsGpu<<<dimGrid, dimBlock>>>(forces_d, masses_d, accelerations_d);
-        cudaDeviceSynchronize();
-        updateVelocitiesGpu<<<dimGrid, dimBlock>>>(velocities_d, accelerations_d, DELTA_T);
-        cudaDeviceSynchronize();
-        updatePositionsGpu<<<dimGrid, dimBlock>>>(positions_d, velocities_d, DELTA_T);
-        cudaDeviceSynchronize();
+        
+        blockSize = 128;
+        dimBlock = dim3(blockSize);
+        dimGrid = dim3((N_BODIES + blockSize - 1) / blockSize);
 
+        updateAccVelPos<<<dimGrid, dimBlock>>>(forces_d, masses_d, accelerations_d, velocities_d, positions_d, DELTA_T);
+        cudaDeviceSynchronize();
+        
         if(step == 0 || step == N_SIMULATIONS - 1) {
             end = std::chrono::high_resolution_clock::now();
-            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
+            duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
             gpu_important_duration += duration.count();
-            std::cout <<std::endl << "GPU: step "<<step<<": The rest took " << duration.count() << " milliseconds." << std::endl;
+            std::cout <<std::endl << "GPU: step "<<step<<": The rest took " << duration_micro.count() << " microseconds." << std::endl;
         }
 
         // needed for next iterations's tree creation on cpu
@@ -1142,7 +1164,7 @@ int main() {
 
     auto start_cpu = std::chrono::high_resolution_clock::now();
 
-    runSimulationCpu(masses, positions_cpu, velocities);
+    //runSimulationCpu(masses, positions_cpu, velocities);
 
     auto end_cpu = std::chrono::high_resolution_clock::now();
     auto duration_cpu = std::chrono::duration_cast<std::chrono::milliseconds>(end_cpu - start_cpu);
@@ -1169,8 +1191,8 @@ int main() {
 
     std::cout<<std::endl<<std::endl;
 
-    std::cout << "CPU important computation took " << cpu_important_duration << " milliseconds." << std::endl;
-    std::cout << "GPU important computation took " << gpu_important_duration << " milliseconds." << std::endl;
+    std::cout << "CPU important computation took " << cpu_important_duration << " microseconds." << std::endl;
+    std::cout << "GPU important computation took " << gpu_important_duration << " microseconds." << std::endl;
 
     std::cout<<std::endl<<std::endl;
 
