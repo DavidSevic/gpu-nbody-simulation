@@ -26,6 +26,7 @@
 // parameters
 const double G = 6.67e-11;
 const int N_BODIES = 1024 * 40;
+const int N_THREADS = 1024 * 40;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
 const int N_SIMULATIONS = 10;
@@ -614,7 +615,7 @@ void computeForces(const Positions& positions,
 
 
 
-__global__ void computeForcesGpu(double* positions, double* masses, double* forces, double* globalMemQuadtree, int quadtreeNumElem, bool useSharedMem) {
+__global__ void computeForcesGpu(double* positions, double* masses, double* forces, double* globalMemQuadtree, int quadtreeNumElem, bool useSharedMem, int n_bodies, int n_threads) {
     
     extern __shared__ double sharedMemQuadtree[];
 
@@ -624,10 +625,10 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
         return;
 
     double* quadtree = globalMemQuadtree;
-    //printf(" shared started ");
+    
     if (useSharedMem) {
 
-        for (int i = threadIdx.x; i < quadtreeNumElem; i += blockDim.x) {
+        for (int i = threadIdx.x; i < quadtreeNumElem; i += blockDim.x) {//blockDim.x) {
             sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CHILDREN_0] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_0];
             sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CHILDREN_1] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_1];
             sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CHILDREN_2] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_2];
@@ -647,126 +648,132 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
         quadtree = sharedMemQuadtree;
     }
     //printf(" shared finished ");
-    double sum[2] = {0, 0};
 
-    double pos_i[2] = {positions[idx * 2 + 0], positions[idx * 2 + 1]};
+    // repeat for multiple bodies
 
-    // max size of the stack is the max depth of the quadtree * 3
-    int nodeStack[QUADTREE_MAX_DEPTH * 3];
-    int stack_top = -1;
+    for(int body_i = idx; body_i < n_bodies; body_i += n_threads) {
+        
+        double sum[2] = {0, 0};
 
-    // push the root node (rootIndex is 0)
-    if (!push(nodeStack, &stack_top, 0)) {
-        printf("Stack overflow while pushing root node.\n");
-        return;
-    }
+        double pos_i[2] = {positions[body_i * 2 + 0], positions[body_i * 2 + 1]};
 
-    while (stack_top >= 0) {
-        int nodeIndex;
-        if (!pop(nodeStack, &stack_top, &nodeIndex)) {
-            printf("Stack underflow while popping node.\n");
-            break;
+        // max size of the stack is the max depth of the quadtree * 3
+        int nodeStack[QUADTREE_MAX_DEPTH * 3];
+        int stack_top = -1;
+
+        // push the root node (rootIndex is 0)
+        if (!push(nodeStack, &stack_top, 0)) {
+            printf("Stack overflow while pushing root node.\n");
+            return;
         }
 
-        //const Quadrant& node = quadtree[nodeIndex];
-        //printf("attemp: nodeIndex: %d \n", nodeIndex);
-        //double* node = &quadtree[nodeIndex];// * QUADRANT_SIZE];
-        double* node = useSharedMem
-            ? &quadtree[nodeIndex]
-            : &quadtree[nodeIndex * QUADRANT_SIZE];
+        while (stack_top >= 0) {
+            int nodeIndex;
+            if (!pop(nodeStack, &stack_top, &nodeIndex)) {
+                printf("Stack underflow while popping node.\n");
+                break;
+            }
 
-        const int ACCESS_INDEX = useSharedMem ? SHARED_MEM_BANKS_NUM : 1;
+            //const Quadrant& node = quadtree[nodeIndex];
+            //printf("attemp: nodeIndex: %d \n", nodeIndex);
+            //double* node = &quadtree[nodeIndex];// * QUADRANT_SIZE];
+            double* node = useSharedMem
+                ? &quadtree[nodeIndex]
+                : &quadtree[nodeIndex * QUADRANT_SIZE];
 
-        /*if (nodeIndex >= quadtreeNumElem) {
-            printf("If you are reading this, something is wrong. (%d / %d)\n", nodeIndex, quadtreeNumElem);
-            continue;
-        }*/
+            const int ACCESS_INDEX = useSharedMem ? SHARED_MEM_BANKS_NUM : 1;
 
-        // if this node has zero mass, skip
-        double nodeMass = node[ACCESS_INDEX * TOTAL_MASS];
-        if (nodeMass <= 1e-15) {
-            continue;
-        }
+            /*if (nodeIndex >= quadtreeNumElem) {
+                printf("If you are reading this, something is wrong. (%d / %d)\n", nodeIndex, quadtreeNumElem);
+                continue;
+            }*/
 
-        // if this node is a leaf with a single occupant
-        int occupantIdx = static_cast<int>(node[ACCESS_INDEX * PARTICLE_INDEX]);
-        bool isLeaf = (node[ACCESS_INDEX * CHILDREN_0] == -1 && 
-                        node[ACCESS_INDEX * CHILDREN_1] == -1 &&
-                        node[ACCESS_INDEX * CHILDREN_2] == -1 &&
-                        node[ACCESS_INDEX * CHILDREN_3] == -1);
-
-        // compute displacement from body idx to this node's center of mass
-        double displacement[2] = {0, 0};
-        displacement[0] = node[ACCESS_INDEX * CENTER_OF_MASS_X] - pos_i[0];
-        displacement[1] = node[ACCESS_INDEX * CENTER_OF_MASS_Y] - pos_i[1];
-
-        double distance_sq = displacement[0]*displacement[0] + displacement[1]*displacement[1];
-        double distance    = std::sqrt(distance_sq) + 1e-15; // small offset to avoid division by zero
-
-        // approximate node size
-        double dx = node[ACCESS_INDEX * X_MAX] - node[ACCESS_INDEX * X_MIN];
-        double dy = node[ACCESS_INDEX * Y_MAX] - node[ACCESS_INDEX * Y_MIN];
-        double node_size = (dx > dy) ? dx : dy;  // max dimension in 2D
-
-        // Barnes-Hut criterion: if node is leaf OR size/distance < THETA
-        // => approximate entire subtree as one body
-        if (isLeaf || (node_size / distance < THETA))
-        {
-            // if it's a leaf for occupant idx, skip self-interaction
-            if (isLeaf && (occupantIdx == idx || (occupantIdx + 2) == -idx)) {
+            // if this node has zero mass, skip
+            double nodeMass = node[ACCESS_INDEX * TOTAL_MASS];
+            if (nodeMass <= 1e-15) {
                 continue;
             }
 
-            // accumulate approximate force
-            double force_mag = (G * masses[idx] * nodeMass) / (distance_sq);
+            // if this node is a leaf with a single occupant
+            int occupantIdx = static_cast<int>(node[ACCESS_INDEX * PARTICLE_INDEX]);
+            bool isLeaf = (node[ACCESS_INDEX * CHILDREN_0] == -1 && 
+                            node[ACCESS_INDEX * CHILDREN_1] == -1 &&
+                            node[ACCESS_INDEX * CHILDREN_2] == -1 &&
+                            node[ACCESS_INDEX * CHILDREN_3] == -1);
 
-            // normalized direction
-            double nx = displacement[0] / distance;
-            double ny = displacement[1] / distance;
+            // compute displacement from body idx to this node's center of mass
+            double displacement[2] = {0, 0};
+            displacement[0] = node[ACCESS_INDEX * CENTER_OF_MASS_X] - pos_i[0];
+            displacement[1] = node[ACCESS_INDEX * CENTER_OF_MASS_Y] - pos_i[1];
 
-            sum[0] += force_mag * nx;
-            sum[1] += force_mag * ny;
-        }
-        else
-        {
-            for (int c = 0; c < 4; ++c)
+            double distance_sq = displacement[0]*displacement[0] + displacement[1]*displacement[1];
+            double distance    = std::sqrt(distance_sq) + 1e-15; // small offset to avoid division by zero
+
+            // approximate node size
+            double dx = node[ACCESS_INDEX * X_MAX] - node[ACCESS_INDEX * X_MIN];
+            double dy = node[ACCESS_INDEX * Y_MAX] - node[ACCESS_INDEX * Y_MIN];
+            double node_size = (dx > dy) ? dx : dy;  // max dimension in 2D
+
+            // Barnes-Hut criterion: if node is leaf OR size/distance < THETA
+            // => approximate entire subtree as one body
+            if (isLeaf || (node_size / distance < THETA))
             {
-                int childIdx = static_cast<int>(node[ACCESS_INDEX * (CHILDREN_0  + c)]);
-                if (childIdx != -1) {
-                    if (!push(nodeStack, &stack_top, childIdx)) {
-                        //printf("Stack overflow while pushing child node %d on position %d. particle: %f. thread: %d\n", childIdx, c, node[ACCESS_INDEX * PARTICLE_INDEX], idx);
-                        /*printf("Stack overflow while pushing child node %f on position %d.\n"
-                                "Particle: %f\n"
-                                "Thread ID: %d\n"
-                                "Children: [%d, %d, %d, %d]\n"
-                                "Center of Mass: (%f, %f)\n"
-                                "Total Mass: %f\n"
-                                "Bounding Box: X[min=%f, max=%f], Y[min=%f, max=%f]\n",
-                                node[ACCESS_INDEX * (CHILDREN_0  + c)],         // Child Node Index
-                                c,                // Position
-                                node[ACCESS_INDEX * PARTICLE_INDEX], // Particle Value
-                                idx,              // Thread ID
-                                node[ACCESS_INDEX * CHILDREN_0], // Children 0
-                                node[ACCESS_INDEX * CHILDREN_1], // Children 1
-                                node[ACCESS_INDEX * CHILDREN_2], // Children 2
-                                node[ACCESS_INDEX * CHILDREN_3], // Children 3
-                                node[ACCESS_INDEX * CENTER_OF_MASS_X], // Center of Mass X
-                                node[ACCESS_INDEX * CENTER_OF_MASS_Y], // Center of Mass Y
-                                node[ACCESS_INDEX * TOTAL_MASS],       // Total Mass
-                                node[ACCESS_INDEX * X_MIN], node[ACCESS_INDEX * X_MAX], // X Bounding Box
-                                node[ACCESS_INDEX * Y_MIN], node[ACCESS_INDEX * Y_MAX]  // Y Bounding Box
-                            );*/
+                // if it's a leaf for occupant idx, skip self-interaction
+                if (isLeaf && (occupantIdx == body_i || (occupantIdx + 2) == -body_i)) {
+                    continue;
+                }
 
-                        break;
+                // accumulate approximate force
+                double force_mag = (G * masses[body_i] * nodeMass) / (distance_sq);
+
+                // normalized direction
+                double nx = displacement[0] / distance;
+                double ny = displacement[1] / distance;
+
+                sum[0] += force_mag * nx;
+                sum[1] += force_mag * ny;
+            }
+            else
+            {
+                for (int c = 0; c < 4; ++c)
+                {
+                    int childIdx = static_cast<int>(node[ACCESS_INDEX * (CHILDREN_0  + c)]);
+                    if (childIdx != -1) {
+                        if (!push(nodeStack, &stack_top, childIdx)) {
+                            //printf("Stack overflow while pushing child node %d on position %d. particle: %f. thread: %d\n", childIdx, c, node[ACCESS_INDEX * PARTICLE_INDEX], body_i);
+                            /*printf("Stack overflow while pushing child node %f on position %d.\n"
+                                    "Particle: %f\n"
+                                    "Thread ID: %d\n"
+                                    "Children: [%d, %d, %d, %d]\n"
+                                    "Center of Mass: (%f, %f)\n"
+                                    "Total Mass: %f\n"
+                                    "Bounding Box: X[min=%f, max=%f], Y[min=%f, max=%f]\n",
+                                    node[ACCESS_INDEX * (CHILDREN_0  + c)],         // Child Node Index
+                                    c,                // Position
+                                    node[ACCESS_INDEX * PARTICLE_INDEX], // Particle Value
+                                    body_i,              // Thread ID
+                                    node[ACCESS_INDEX * CHILDREN_0], // Children 0
+                                    node[ACCESS_INDEX * CHILDREN_1], // Children 1
+                                    node[ACCESS_INDEX * CHILDREN_2], // Children 2
+                                    node[ACCESS_INDEX * CHILDREN_3], // Children 3
+                                    node[ACCESS_INDEX * CENTER_OF_MASS_X], // Center of Mass X
+                                    node[ACCESS_INDEX * CENTER_OF_MASS_Y], // Center of Mass Y
+                                    node[ACCESS_INDEX * TOTAL_MASS],       // Total Mass
+                                    node[ACCESS_INDEX * X_MIN], node[ACCESS_INDEX * X_MAX], // X Bounding Box
+                                    node[ACCESS_INDEX * Y_MIN], node[ACCESS_INDEX * Y_MAX]  // Y Bounding Box
+                                );*/
+
+                            break;
+                        }
                     }
                 }
             }
-        }
-    } // end while stack
+        } // end while stack
 
-    // store final force for body idx
-    forces[idx * 2 + 0] = sum[0];
-    forces[idx * 2 + 1] = sum[1];
+        // store final force for body idx
+        forces[body_i * 2 + 0] = sum[0];
+        forces[body_i * 2 + 1] = sum[1];
+    }
 }
 
 void updateAccelerations(const Forces& forces, const Masses& masses, Positions& accelerations) {
@@ -829,21 +836,23 @@ __global__ void updatePositionsGpu(double* positions, double* velocities, double
     }
 }
 
-__global__ void updateAccVelPos(double* forces, double* masses, double* accelerations, double* velocities, double* positions, double DELTA_T) {
+__global__ void updateAccVelPos(double* forces, double* masses, double* accelerations, double* velocities, double* positions, double DELTA_T, int n_bodies, int n_threads) {
     
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (idx >= N_BODIES)
         return;
 
-    accelerations[idx * 2 + 0] = forces[idx * 2 + 0] / masses[idx];
-    accelerations[idx * 2 + 1] = forces[idx * 2 + 1] / masses[idx];
+    for (int body_i = idx; body_i < n_bodies; body_i += n_threads) {
+        accelerations[body_i * 2 + 0] = forces[body_i * 2 + 0] / masses[body_i];
+        accelerations[body_i * 2 + 1] = forces[body_i * 2 + 1] / masses[body_i];
 
-    velocities[idx * 2 + 0] += accelerations[idx * 2 + 0] * DELTA_T;
-    velocities[idx * 2 + 1] += accelerations[idx * 2 + 1] * DELTA_T;
+        velocities[body_i * 2 + 0] += accelerations[body_i * 2 + 0] * DELTA_T;
+        velocities[body_i * 2 + 1] += accelerations[body_i * 2 + 1] * DELTA_T;
 
-    positions[idx * 2 + 0] += velocities[idx * 2 + 0] * DELTA_T;
-    positions[idx * 2 + 1] += velocities[idx * 2 + 1] * DELTA_T;
+        positions[body_i * 2 + 0] += velocities[body_i * 2 + 0] * DELTA_T;
+        positions[body_i * 2 + 1] += velocities[body_i * 2 + 1] * DELTA_T;
+    }
 }
 
 void printBodies(const Masses& masses, const Positions& positions, const Velocities& velocities) {
@@ -1034,7 +1043,8 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         //sharedMemSize = 0;
 
         dim3 dimBlock(blockSize);
-        dim3 dimGrid((N_BODIES + blockSize - 1) / blockSize);
+        //dim3 dimGrid((N_BODIES + blockSize - 1) / blockSize);
+        dim3 dimGrid((N_THREADS + blockSize - 1) / blockSize);
 
         //std::cout<<"number of blocks: "<< (N_BODIES + blockSize - 1) / blockSize <<std::endl;
 
@@ -1043,7 +1053,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
             start = std::chrono::high_resolution_clock::now();
 
         // pass quadtree memory size for dynamic allocation of shared memory
-        computeForcesGpu<<<dimGrid, dimBlock, sharedMemSize>>>(positions_d, masses_d, forces_d, quadtree_d, quadtree.size(), sharedMemSize > 0);   
+        computeForcesGpu<<<dimGrid, dimBlock, sharedMemSize>>>(positions_d, masses_d, forces_d, quadtree_d, quadtree.size(), sharedMemSize > 0, N_BODIES, N_THREADS);   
         cudaDeviceSynchronize();
 
         if(step == 0 || step == N_SIMULATIONS - 1) {
@@ -1087,9 +1097,10 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         
         blockSize = 128;
         dimBlock = dim3(blockSize);
-        dimGrid = dim3((N_BODIES + blockSize - 1) / blockSize);
+        //dimGrid = dim3((N_BODIES + blockSize - 1) / blockSize);
+        dimGrid = dim3((N_THREADS + blockSize - 1) / blockSize);
 
-        updateAccVelPos<<<dimGrid, dimBlock>>>(forces_d, masses_d, accelerations_d, velocities_d, positions_d, DELTA_T);
+        updateAccVelPos<<<dimGrid, dimBlock>>>(forces_d, masses_d, accelerations_d, velocities_d, positions_d, DELTA_T, N_BODIES, N_THREADS);
         cudaDeviceSynchronize();
         
         if(step == 0 || step == N_SIMULATIONS - 1) {

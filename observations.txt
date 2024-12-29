@@ -118,3 +118,38 @@ time after:
 
 For global memory, thre are no banks, but coalesced access is important. since all bodies are sequential in memory and threads acces them
 in the same way, no optimization is needed
+
+
+final implementation with arbitrary threads (40 * 1024 threads, 10 iterations, blocksize=32):
+
+cpu total: 23s
+cpu important: 4s
+
+gpu 1 thread total: 40s
+gpu 1 thread important 37s
+
+gpu 2 threads important 18.5s
+
+gpu 32 threads important 1.4s
+
+gpu 64 threads important 0.7s
+
+gpu 128 threads important 0.45s
+
+gpu 256 threads important 0.33s
+
+gpu 512 threads important 0.19s
+
+gpu 1024 threads important 0.10s
+
+gpu 1024 * 2 threads important 0.06s
+
+gpu 1024 * 4 threads important 0.037s
+
+gpu 1024 * 8 threads important 0.031s
+
+gpu 1024 * 16 threads important 0.029s
+
+gpu 1024 * 32 threads important 0.0279s
+
+gpu 1024 * 40 (1:1 with bodies) threads important 0.0279s
