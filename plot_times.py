@@ -1,7 +1,10 @@
+#!/usr/bin/env python3
+
 import sys
 import os
 import re
 import matplotlib.pyplot as plt
+import numpy as np
 
 ###############################################################################
 # 1) Parsing: handle lines like "40000, 1024*16, 10, Loaded 40000 bodies ..."
@@ -27,10 +30,8 @@ def parse_gpu_important_times(filename):
     """
     Reads a text file with lines such as:
       40000, 1, 10, Loaded 40000 bodies from text files.
-
       (then some blank lines, CPU lines, GPU lines, etc)
-
-      GPU important computation took XXXX microseconds.
+      GPU important computation took XXXX microseconds
 
     We'll store the times by thread count in a dict:
       times_by_thread = {
@@ -115,7 +116,7 @@ def compute_speedups(averages):
 
 def compute_efficiencies(averages):
     """
-    Parallel Efficiency E(p) = S(p)/p = [T(1)/T(p)] / p.
+    Parallel Efficiency E(P) = S(P)/p = [T(1)/T(p)] / p.
     Returns a list of (P, E(P)).
     """
     # Find T(1)
@@ -129,21 +130,24 @@ def compute_efficiencies(averages):
     efficiencies = []
     for (p, t_p) in averages:
         if t_p != 0:
-            s_p = t1 / t_p         # Speedup
-            e_p = s_p / p          # Efficiency
+            s_p = t1 / t_p  # Speedup
+            e_p = s_p / p   # Efficiency
             efficiencies.append((p, e_p))
     return efficiencies
 
 ###############################################################################
-# 3) Plotting with Discrete X-Axis
+# 3) Plotting
 ###############################################################################
 
-def plot_time_numeric(averages, png_filename, use_log_scale=False):
+def plot_time_numeric(averages, png_filename,
+                      use_log_scale_x=False,
+                      use_log_scale_y=False):
     """
     Plot T(P) vs P on a numeric x-axis.
     
-    - averages: list of (thread_count, avg_time), typically sorted or unsorted
-    - use_log_scale: if True, the y-axis is in log scale
+    - averages: list of (thread_count, avg_time)
+    - use_log_scale_x: if True, the x-axis is in log scale
+    - use_log_scale_y: if True, the y-axis is in log scale
     - Plots an 'ideal' line T_ideal(p) = T(1)/p as dashed red,
       so you can compare with perfect linear scaling (S(p)=p).
     """
@@ -161,18 +165,15 @@ def plot_time_numeric(averages, png_filename, use_log_scale=False):
     plt.plot(thread_counts, avg_times, marker='o', label='Measured T(p)')
 
     # If T(1) is available, we can plot the ideal line T_ideal(p) = T(1)/p
-    # T(1) is the time for p=1 if it exists
     t1_candidates = [t for (p, t) in data_sorted if p == 1]
     if t1_candidates:
         t1 = t1_candidates[0]
         p_min = min(thread_counts)
         p_max = max(thread_counts)
 
-        # Make a dense range of p-values to plot the ideal line
-        p_line = np.linspace(p_min, p_max, 100)  
+        p_line = np.linspace(p_min, p_max, 100)
         # Avoid dividing by 0 if p_min=0
-        p_line = p_line[p_line > 0]  # in case p_min could be 0
-
+        p_line = p_line[p_line > 0]
         t_line = t1 / p_line  # ideal time under perfect scaling
         plt.plot(p_line, t_line, 'r--', alpha=0.6, label='Ideal T(1)/p')
 
@@ -188,14 +189,19 @@ def plot_time_numeric(averages, png_filename, use_log_scale=False):
             fontsize=9
         )
 
+    # Optional: use log scale for x-axis if requested
+    if use_log_scale_x:
+        plt.xscale('log')
     # Optional: use log scale for y-axis if requested
-    if use_log_scale:
+    if use_log_scale_y:
         plt.yscale('log')
 
     plt.xlabel("Threads (P) - Numeric scale")
     plt.ylabel("Average GPU Important Time (microseconds)")
-    title = "T(P) vs. P (Numeric X)"
-    if use_log_scale:
+    title = "T(P) vs. P"
+    if use_log_scale_x:
+        title += " [Log X]"
+    if use_log_scale_y:
         title += " [Log Y]"
     plt.title(title)
 
@@ -204,171 +210,175 @@ def plot_time_numeric(averages, png_filename, use_log_scale=False):
     plt.tight_layout()
     plt.savefig(png_filename, dpi=150)
     plt.show()
-    #plt.close()
 
     print(f"Saved numeric time plot as '{png_filename}'")
 
-import matplotlib.pyplot as plt
 
+import numpy as np
 import matplotlib.pyplot as plt
 
 import numpy as np
 import matplotlib.pyplot as plt
 
-def plot_speedup_numeric_split_colored(speedups, png_filename, threshold=64):
+import numpy as np
+import matplotlib.pyplot as plt
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+import numpy as np
+import matplotlib.pyplot as plt
+
+def plot_speedup_numeric_colored_stepped(speedups, png_filename, use_log_scale_x=False):
     """
-    Split speedups into two groups based on a threshold (p <= threshold in left subplot,
-    p > threshold in right subplot). Then plot them with a numeric x-axis, adding colored
-    regions:
-      - Red where S(p) < 1
-      - Green where 1 <= S(p) < p
-      - Yellow where S(p) >= p
-    We also draw the line y = x in each subplot (dashed) to show "ideal" speedup.
+    Plots speedups (S(p) = T(1)/T(p)) vs number of threads p in a single figure,
+    using three 'stepped' background regions but with finer steps.
+
+    Regions:
+      1) Red    : 0 <= y < 1
+      2) Green  : 1 <= y < x
+      3) Yellow : x <= y
+
+    The boundary between green and yellow follows the dashed red line y = x,
+    drawn with a 'stepped' style. The steps are smaller than integer increments
+    to make it visually smoother.
+
+    :param speedups:        List of tuples (p, S(p)), e.g. [(1,1.0),(2,2.01),(4,3.96),...]
+    :param png_filename:    Output image filename
+    :param use_log_scale_x: If True, use a log scale on the x-axis
     """
 
-    # Sort all data by ascending p
+    # 1) Sort data by ascending p
     speedups_sorted = sorted(speedups, key=lambda x: x[0])
-    small_data = [(p, s) for (p, s) in speedups_sorted if p <= threshold]
-    large_data = [(p, s) for (p, s) in speedups_sorted if p > threshold]
-
-    # If no data at all, just return
     if not speedups_sorted:
         print(f"No speedup data to plot: {png_filename}")
         return
 
-    # Create figure with two side-by-side subplots
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
+    # Extract p, s arrays
+    p_vals = [t[0] for t in speedups_sorted]
+    s_vals = [t[1] for t in speedups_sorted]
 
-    ############################################################################
-    # Helper function to color the background regions: red (y<1), green (1<=y<x),
-    # yellow (y>=x), for a given axis and p-range.
-    ############################################################################
-    def fill_speedup_regions(ax, p_min, p_max, s_max):
-        """
-        Fill the regions:
-          0 <= y < 1      -> red
-          1 <= y < x      -> green
-          x <= y <= s_max -> yellow
-        Only for p in [p_min, p_max].
-        s_max is an upper bound for the y-axis so the fill covers the area.
-        """
-        # Generate a dense array of p-values in [p_min, p_max]
-        p_arr = np.linspace(p_min, p_max, 300)
+    p_min = min(p_vals)
+    p_max = max(p_vals)
+    s_max = max(s_vals) * 1.1  # extra margin above max measured speedup
 
-        # We assume p_min >= 1 in typical HPC usage. If p_min < 1, adjust as needed.
-        # 1) Fill from y=0 to y=1  (light red)
-        ax.fill_between(p_arr, 0, 1,
-                        color='red', alpha=0.15,
-                        label='S(p) < 1' if p_arr[0] == p_arr[0] else "")  # label once
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10,6))
 
-        # 2) Fill from y=1 to y=x  (light green)
-        #    We'll use np.minimum(p_arr, s_max) just to avoid going beyond s_max
-        ax.fill_between(p_arr, 1, np.minimum(p_arr, s_max),
-                        where=(p_arr >= 1),  # only makes sense if p >= 1
-                        color='green', alpha=0.15,
-                        label='1 ≤ S(p) < p')
-
-        # 3) Fill from y=x to y=s_max (light yellow)
-        ax.fill_between(p_arr, p_arr, s_max,
-                        where=(p_arr <= s_max),
-                        color='yellow', alpha=0.15,
-                        label='S(p) ≥ p')
-
-    # --- LEFT SUBPLOT: p <= threshold ---
-    if small_data:
-        p_small, s_small = zip(*small_data)
-        p_min_small, p_max_small = min(p_small), max(p_small)
-        s_max_small = max(s_small)*1.1 if s_small else 1.0
-
-        # Fill background regions
-        fill_speedup_regions(ax1, p_min_small, p_max_small, s_max_small)
-
-        # Now plot the measured speedup
-        ax1.plot(p_small, s_small, marker='o', label='Measured Speedup')
-
-        # Ideal line y=x
-        # We'll plot it only over [p_min_small, p_max_small]
-        p_line = np.linspace(p_min_small, p_max_small, 50)
-        ax1.plot(p_line, p_line, 'r--', alpha=0.6, label='Ideal: y = p')
-
-        # Annotate each data point
-        for x_val, y_val in zip(p_small, s_small):
-            ax1.annotate(
-                f"{y_val:.2f}",
-                xy=(x_val, y_val),
-                xytext=(0, 5),
-                textcoords='offset points',
-                ha='center', va='bottom',
-                fontsize=9
-            )
-
-        ax1.set_xlim([p_min_small, p_max_small])
-        ax1.set_ylim([0, max(s_max_small, 1)])  # ensure we can see y=1 line
-        ax1.set_xlabel(f"Threads (p) ≤ {threshold}")
-        ax1.set_ylabel("Speedup S(p) = T(1)/T(p)")
-        ax1.set_title("Speedup: Smaller p")
-        ax1.grid(True)
-        ax1.legend()
+    ########################################################################
+    # (Optional) Clamp x-axis if p_max is huge compared to s_max
+    ########################################################################
+    clamp_factor = 2.0
+    if p_max > clamp_factor * s_max:
+        print(f"NOTE: p_max={p_max:.2f} >> s_max={s_max:.2f}, "
+              f"clamping x-axis to {clamp_factor}*s_max for clarity.")
+        x_max_vis = max(p_max, clamp_factor * s_max)
     else:
-        # If empty
-        ax1.text(0.5, 0.5, "No data ≤ threshold", ha='center', va='center')
-        ax1.set_axis_off()
+        x_max_vis = p_max
 
-    # --- RIGHT SUBPLOT: p > threshold ---
-    if large_data:
-        p_large, s_large = zip(*large_data)
-        p_min_large, p_max_large = min(p_large), max(p_large)
-        s_max_large = max(s_large)*1.1 if s_large else 1.0
+    ########################################################################
+    # Build a DENSE array of p-values for the stepped fill/line
+    # Instead of 1 point per integer, we use e.g. 500 steps for a smoother look
+    ########################################################################
+    STEPS = 1000000  # Increase/decrease for finer/coarser stepping
+    # Ensure we start at least at p=1 to avoid log-scale issues
+    p_start = max(1, p_min)
+    p_arr = np.linspace(p_start, x_max_vis, STEPS)
 
-        # Fill background regions
-        fill_speedup_regions(ax2, p_min_large, p_max_large, s_max_large)
+    ########################################################################
+    # 2) Color regions with stepped fill
+    #
+    #   Red   : 0 <= y < 1
+    #   Green : 1 <= y < x
+    #   Yellow: x <= y
+    #
+    # We use 'step="mid"' to get a 'stepped' boundary.
+    ########################################################################
 
-        # Measured speedup
-        ax2.plot(p_large, s_large, marker='o', label='Measured Speedup')
+    # 2a) Red region: 0 <= y < 1
+    ax.fill_between(p_arr,
+                    0, 1,
+                    color='red', alpha=0.15,
+                    label='S(p) < 1',
+                    step='mid')
 
-        # Ideal line y=x for [p_min_large, p_max_large]
-        p_line = np.linspace(p_min_large, p_max_large, 50)
-        ax2.plot(p_line, p_line, 'r--', alpha=0.6, label='Ideal: y = p')
+    # 2b) Green region: 1 <= y < x  (but do not exceed s_max)
+    #    We'll fill up to min(x, s_max).
+    y_top_green = np.minimum(p_arr, s_max)
+    ax.fill_between(p_arr,
+                    1, y_top_green,
+                    where=(p_arr >= 1),   # only fill if x >= 1
+                    color='green', alpha=0.15,
+                    label='1 ≤ S(p) < p',
+                    step='mid')
 
-        # Annotate each point
-        for x_val, y_val in zip(p_large, s_large):
-            ax2.annotate(
-                f"{y_val:.2f}",
-                xy=(x_val, y_val),
-                xytext=(0, 5),
-                textcoords='offset points',
-                ha='center', va='bottom',
-                fontsize=9
-            )
+    # 2c) Yellow region: x <= y <= s_max
+    ax.fill_between(p_arr,
+                    p_arr, s_max,
+                    where=(p_arr <= s_max),
+                    color='yellow', alpha=0.15,
+                    label='S(p) ≥ p',
+                    step='mid')
 
-        ax2.set_xlim([p_min_large, p_max_large])
-        ax2.set_ylim([0, max(s_max_large, 1)])
-        ax2.set_xlabel(f"Threads (p) > {threshold}")
-        ax2.set_ylabel("Speedup S(p) = T(1)/T(p)")
-        ax2.set_title("Speedup: Larger p")
-        ax2.grid(True)
-        ax2.legend()
-    else:
-        ax2.text(0.5, 0.5, "No data > threshold", ha='center', va='center')
-        ax2.set_axis_off()
+    ########################################################################
+    # 3) Plot the measured speedups as a normal line with markers
+    ########################################################################
+    ax.plot(p_vals, s_vals, marker='o', linestyle='-', label='Measured Speedup')
+
+    ########################################################################
+    # 4) Plot the stepped dashed red line for y = x
+    #
+    #    We use the same p_arr so the "step" frequency matches the fills.
+    #    'drawstyle="steps-mid"' ensures the line breaks at each p_arr point.
+    ########################################################################
+    ax.plot(p_arr, p_arr,
+            'r--',
+            alpha=0.8,
+            label='Ideal: y = p',
+            drawstyle='steps-mid')
+
+    ########################################################################
+    # 5) Annotate each data point with speedup
+    ########################################################################
+    for x_val, y_val in zip(p_vals, s_vals):
+        ax.annotate(f"{y_val:.2f}",
+                    xy=(x_val, y_val),
+                    xytext=(0,5),
+                    textcoords='offset points',
+                    ha='center', va='bottom',
+                    fontsize=9)
+
+    ########################################################################
+    # 6) Axis ranges
+    ########################################################################
+    ax.set_xlim(left=p_start, right=x_max_vis)
+    ax.set_ylim(bottom=0, top=max(s_max,1))
+
+    ax.set_xlabel("Threads (p)")
+    ax.set_ylabel("Speedup S(p) = T(1)/T(p)")
+    ax.set_title("Speedup vs. Threads (Finer Stepped Regions & Line)")
+
+    if use_log_scale_x:
+        ax.set_xscale('log')
+
+    ax.grid(True)
+    ax.legend()
 
     plt.tight_layout()
     plt.savefig(png_filename, dpi=150)
     plt.show()
-    #plt.close()
-
-    print(f"Saved split speedup plot with color regions as '{png_filename}'")
+    print(f"Saved stepped speedup plot as '{png_filename}'")
 
 
-def plot_efficiency_numeric(efficiencies, png_filename):
+
+
+def plot_efficiency_numeric(efficiencies, png_filename, use_log_scale_x=False):
     """
     Plot Efficiency(p) = S(p)/p vs p on a numeric x-axis,
     labeling each point with its value.
     
-    E(p) close to 1 => near-perfect scaling.
+    - use_log_scale_x: if True, the x-axis will be in log scale.
     """
-    import matplotlib.pyplot as plt
-
     if not efficiencies:
         print(f"No efficiency data to plot: {png_filename}")
         return
@@ -401,19 +411,18 @@ def plot_efficiency_numeric(efficiencies, png_filename):
     plt.axhline(y=1.0, color='red', linestyle='--', alpha=0.5, label='Ideal E=1.0')
     plt.legend()
 
-    # Labeling
+    # Log scale on the x-axis if requested
+    if use_log_scale_x:
+        plt.xscale('log')
+
     plt.xlabel("Threads (P) - Numeric scale")
     plt.ylabel("Efficiency E(P) = S(P)/P")
     plt.title("Efficiency vs. P (Numeric X)")
-
     plt.grid(True)
     plt.tight_layout()
     plt.savefig(png_filename, dpi=150)
     plt.show()
-    #plt.close()
-
     print(f"Saved numeric efficiency plot as '{png_filename}'")
-
 
 ###############################################################################
 # 4) Main program
@@ -448,18 +457,32 @@ if __name__ == "__main__":
     for thr, e in efficiencies:
         print(f"  P = {thr}, E(P) = {e:.2f}")
 
-    # 5) Plot T(P) on discrete x-axis, linear y
-    #plot_time_numeric(averages, f"{base}_time_linear.png", use_log_scale=False)
-    #print(f"Saved {base}_time_linear.png")
+    # 5) Plot T(P) with log-x
+    #plot_time_numeric(
+    #    averages, 
+    #    f"{base}_time_logx.png",
+    #    use_log_scale_x=True, 
+    #    use_log_scale_y=False
+    #)
 
-    # 6) Plot T(P) on discrete x-axis, log y
-    #plot_time_numeric(averages, f"{base}_time_logy.png", use_log_scale=True)
-    #print(f"Saved {base}_time_logy.png")
+    # 6) Plot T(P) with log-y (optional, just an example)
+    # plot_time_numeric(
+    #    averages, 
+    #    f"{base}_time_logy.png",
+    #    use_log_scale_x=False,
+    #    use_log_scale_y=True
+    # )
 
-    # 7) Plot speedup S(P) on discrete x-axis
-    plot_speedup_numeric_split_colored(speedups, f"{base}_speedup.png")
-    print(f"Saved {base}_speedup.png")
+    # 7) Plot speedup with log-x
+    plot_speedup_numeric_colored_stepped(
+        speedups,
+        f"{base}_speedup_logx.png",
+        use_log_scale_x=True
+    )
 
-    # 8) Plot efficiency E(P) on discrete x-axis
-    plot_efficiency_numeric(efficiencies, f"{base}_efficiency.png")
-    print(f"Saved {base}_efficiency.png")
+    # 8) Plot efficiency with log-x
+    plot_efficiency_numeric(
+        efficiencies,
+        f"{base}_efficiency_logx.png",
+        use_log_scale_x=True
+    )
