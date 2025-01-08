@@ -3,7 +3,7 @@
 #endif
 
 #ifndef N_THREADS
-#define N_THREADS 1024 * 40
+#define N_THREADS 1024 * 1
 #endif
 
 #ifndef N_SIMULATIONS
@@ -25,11 +25,8 @@
 
 // parameters
 const double G = 6.67e-11;
-//const int N_BODIES = 1024 * 40;
-//const int N_THREADS = 1024 * 40;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
-//const int N_SIMULATIONS = 10;
 const double LOWER_M = 1e-1;
 const double HIGHER_M = 5e-1;
 const double LOWER_P = -1e-1;
@@ -44,12 +41,6 @@ using Velocities = std::array<Vector, N_BODIES>;
 using Forces = std::array<Vector, N_BODIES>;
 using Masses = std::array<double, N_BODIES>;
 using Accelerations = std::array<Vector, N_BODIES>;
-
-// debug
-Forces forces_cpu, forces_gpu;
-Positions pos_cpu, pos_gpu;
-Accelerations acc_cpu, acc_gpu;
-Velocities vel_cpu, vel_gpu, vel_init_cpu, vel_init_gpu;
 
 // Constants for indexing the Quadrant array
 const int QUADRANT_SIZE = 12;
@@ -77,9 +68,9 @@ const int MAX_BLOCK_SIZE = 1024; // physical limit
 const int MAX_SHARED_MEM_PER_BLOCK_B = 48 * 1024;
 const int SHARED_MEM_BANKS_NUM = 32;
 
-std::chrono::microseconds::rep cpu_important_duration = 0;
-std::chrono::microseconds::rep gpu_important_duration = 0;
-std::chrono::microseconds::rep gpu_tree_building_duration = 0;
+std::chrono::microseconds::rep cpu_parallel_duration = 0;
+std::chrono::microseconds::rep gpu_parallel_duration = 0;
+
 
 double generateRandom(double lower, double upper) {
     return lower + static_cast<double>(std::rand()) / RAND_MAX * (upper - lower);
@@ -164,13 +155,15 @@ void loadSimulationDataFromText(const std::string& massesFile,
     std::cout << "Loaded " << n_bodies << " bodies from text files." << std::endl;
 }
 
-__global__ void initializeCurandStates(curandState* states, unsigned long seed) {
+__global__ void initializeCurandStatesGpu(curandState* states, unsigned long seed) {
     int idx = blockIdx.x * blockDim.x + threadIdx.x;
 
     if (idx >= N_BODIES)
         return;
 
-    curand_init(seed, idx, 0, &states[idx]);
+    for (int body_i = idx; body_i < N_BODIES; body_i += N_THREADS) {
+        curand_init(seed, body_i, 0, &states[body_i]);
+    }
 }
 
 void initializeMasses(Masses& masses, double LOWER_M, double HIGHER_M,
@@ -198,8 +191,10 @@ __global__ void initializeMassesGpu(double* masses, double lower, double higher,
 
     if (idx >= N_BODIES)
         return;
-    
-    masses[idx] = generateRandomGpu(lower, higher, &states[idx]);
+
+    for (int body_i = idx; body_i < N_BODIES; body_i += N_THREADS) {
+        masses[body_i] = generateRandomGpu(lower, higher, &states[body_i]);
+    }
 }
 
 void initializeVectors(Positions& vectors, double lower, double upper,
@@ -232,9 +227,17 @@ __global__ void initializeVectorsGpu(double* vectors, double lower, double upper
     if (idx >= N_BODIES)
         return;
 
-    for (int i = 0; i < N_DIM; ++i) {
-        vectors[idx * N_DIM + i] = generateRandomGpu(lower, upper, &states[idx]);
+    for (int body_i = idx; body_i < N_BODIES; body_i += N_THREADS) {
+        for (int i = 0; i < N_DIM; ++i) {
+            vectors[body_i * N_DIM + i] = generateRandomGpu(lower, upper, &states[body_i]);
+        }
     }
+}
+
+void initializeCpu(Masses& masses, Positions& positions, Positions& velocities, bool save_to_file) {
+    initializeMasses(masses, LOWER_M, HIGHER_M, save_to_file, "masses_init.txt");
+    initializeVectors(positions, LOWER_P, HIGHER_P, save_to_file, "positions_init.txt");
+    initializeVectors(velocities, LOWER_V, HIGHER_v, save_to_file, "velocities_init.txt");
 }
 
 void initializeGpu(Masses& masses, Positions& positions, Positions& velocities) {
@@ -249,14 +252,15 @@ void initializeGpu(Masses& masses, Positions& positions, Positions& velocities) 
     cudaMalloc( (void**)&velocities_d, N_BODIES * N_DIM * sizeof(double));
 
     // calculate block and grid
-    int blockSize = (N_BODIES <= MAX_BLOCK_SIZE) ? N_BODIES : MAX_BLOCK_SIZE;
+    int blockSize = (N_BODIES <= 128) ? N_BODIES : 128;
 
     dim3 dimBlock(blockSize);
-	dim3 dimGrid((N_BODIES + blockSize - 1) / blockSize);
+	dim3 dimGrid((N_THREADS + blockSize - 1) / blockSize);
+    //dim3 dimGrid((N_BODIES + blockSize - 1) / blockSize);
 
     curandState* states_d;
     cudaMalloc((void**)&states_d, N_BODIES * sizeof(curandState));
-    initializeCurandStates<<<dimGrid, dimBlock>>>(states_d, time(NULL));
+    initializeCurandStatesGpu<<<dimGrid, dimBlock>>>(states_d, time(NULL));
     cudaDeviceSynchronize();
 
     // execute kernel codes
@@ -752,18 +756,6 @@ void updateAccelerations(const Forces& forces, const Masses& masses, Positions& 
     }
 }
 
-__global__ void updateAccelerationsGpu(double* forces, double* masses, double* accelerations) {
-    
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (idx >= N_BODIES)
-        return;
-
-    for (int k = 0; k < N_DIM; ++k) {
-        accelerations[idx * N_DIM + k] = forces[idx * N_DIM + k] / masses[idx];
-    }
-}
-
 void updateVelocities(Velocities& velocities, const Positions& accelerations, double DELTA_T) {
     for (int i = 0; i < N_BODIES; ++i) {
         for (int k = 0; k < N_DIM; ++k) {
@@ -772,35 +764,11 @@ void updateVelocities(Velocities& velocities, const Positions& accelerations, do
     }
 }
 
-__global__ void updateVelocitiesGpu(double* velocities, double* accelerations, double DELTA_T) {
-    
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (idx >= N_BODIES)
-        return;
-    
-    for (int k = 0; k < N_DIM; ++k) {
-        velocities[idx * N_DIM + k] += accelerations[idx * N_DIM + k] * DELTA_T;
-    }
-}
-
 void updatePositions(Positions& positions, const Velocities& velocities, double DELTA_T) {
     for (int i = 0; i < N_BODIES; ++i) {
         for (int k = 0; k < N_DIM; ++k) {
             positions[i][k] += velocities[i][k] * DELTA_T;
         }
-    }
-}
-
-__global__ void updatePositionsGpu(double* positions, double* velocities, double DELTA_T) {
-    
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-    if (idx >= N_BODIES)
-        return;
-    
-    for (int k = 0; k < N_DIM; ++k) {
-        positions[idx * N_DIM + k] += velocities[idx * N_DIM + k] * DELTA_T;
     }
 }
 
@@ -862,7 +830,6 @@ void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities
     double absolute_t = 0.0;
 
     savePositions(output_str, positions, absolute_t);
-    //printBodies(masses, positions, velocities);
 
     auto start = std::chrono::high_resolution_clock::now();
     auto end = std::chrono::high_resolution_clock::now();
@@ -873,17 +840,7 @@ void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities
         absolute_t += DELTA_T;
 
         // create the quadtree
-
-        //if(step == 0 || step == N_SIMULATIONS - 1)
-            //start = std::chrono::high_resolution_clock::now();
-
         quadtree = buildTree(positions, masses);
-
-        /*if(step == 0 || step == N_SIMULATIONS - 1) {
-            end = std::chrono::high_resolution_clock::now();
-            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            std::cout <<std::endl << "CPU: step "<<step<<": Building tree took " << duration.count() << " milliseconds." << std::endl;
-        }*/
         
         // Write the quadtree to a file for visualization
         if (step == 0)
@@ -891,21 +848,9 @@ void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities
         else if (step == N_SIMULATIONS - 1)
             TraverseTreeToFile(0, tree_file_final, positions);
 
-        //if(step == 0 || step == N_SIMULATIONS - 1)
         start = std::chrono::high_resolution_clock::now();
         
         computeForces(positions, masses, forces);
-        
-        //if(step == 0 || step == N_SIMULATIONS - 1) {
-        //end = std::chrono::high_resolution_clock::now();
-        //duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-        //duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        //cpu_important_duration += duration_micro.count();
-            //std::cout <<std::endl << "CPU: step "<<step<<": Force calculations took " << duration.count() << " milliseconds." << std::endl;
-        //}
-        
-        //if(step == 0 || step == N_SIMULATIONS - 1)
-            //start = std::chrono::high_resolution_clock::now();
 
         updateAccelerations(forces, masses, accelerations);
         
@@ -913,12 +858,9 @@ void runSimulationCpu(Masses masses, Positions& positions, Velocities velocities
         
         updatePositions(positions, velocities, DELTA_T);
 
-        //if(step == 0 || step == N_SIMULATIONS - 1) {
         end = std::chrono::high_resolution_clock::now();
         duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        cpu_important_duration += duration_micro.count();
-            //std::cout <<std::endl << "CPU: step "<<step<<": The rest took " << duration_micro.count() << " microseconds." << std::endl;
-        //}
+        cpu_parallel_duration += duration_micro.count();
 
         savePositions(output_str, positions, absolute_t);
     }
@@ -966,28 +908,8 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     for (int step = 0; step < N_SIMULATIONS; ++step) {
         absolute_t += DELTA_T;
 
-        // debug
-        //if(step == 0 || step == N_SIMULATIONS - 1)
-        start = std::chrono::high_resolution_clock::now();
-        
-        
-
         // build the tree on cpu
         quadtree = buildTree(positions, masses);
-
-        end = std::chrono::high_resolution_clock::now();
-        gpu_tree_building_duration += std::chrono::duration_cast<std::chrono::microseconds>(end - start).count();
-        /*
-        if(step == 0)
-            std::cout<<"tree creation step 0: "<<gpu_tree_building_duration<<" microseconds\n";
-        else if(step == N_SIMULATIONS - 1)
-            std::cout<<"tree creation step last: "<<std::chrono::duration_cast<std::chrono::microseconds>(end - start).count()<<" microseconds\n";
-        */
-        /*if(step == 0 || step == N_SIMULATIONS - 1) {
-            end = std::chrono::high_resolution_clock::now();
-            duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
-            std::cout <<std::endl << "GPU: step "<<step<<": Building tree took " << duration.count() << " milliseconds." << std::endl;
-        }*/
         
         // writing tree info in first and last iteration
         if (step == 0)
@@ -1024,16 +946,6 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         computeForcesGpu<<<dimGrid, dimBlock, sharedMemSize>>>(positions_d, masses_d, forces_d, quadtree_d, quadtree.size(), sharedMemSize > 0);
         cudaDeviceSynchronize();
 
-        //if(step == 0 || step == N_SIMULATIONS - 1) {
-        //end = std::chrono::high_resolution_clock::now();
-        //duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        //std::cout <<std::endl << "GPU: step "<<step<<": Force calculations took " << duration_micro.count() << " microseconds." << std::endl;
-        //gpu_important_duration += duration_micro.count();
-        //}
-
-        //if(step == 0 || step == N_SIMULATIONS - 1)
-        //start = std::chrono::high_resolution_clock::now();
-
         // defining dimensions for rest of the calculation
         blockSize = 128;
         dimBlock = dim3(blockSize);
@@ -1046,15 +958,8 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         //if(step == 0 || step == N_SIMULATIONS - 1) {
         end = std::chrono::high_resolution_clock::now();
         duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        gpu_important_duration += duration_micro.count();
-            //std::cout <<std::endl << "GPU: step "<<step<<": The rest took " << duration_micro.count() << " microseconds." << std::endl;
-        //}
-        /*
-        if(step == 0)
-            std::cout<<"rest step 0: "<<duration_micro.count()<<" microseconds\n";
-        else if (step == N_SIMULATIONS - 1)
-            std::cout<<"rest step last: "<<duration_micro.count()<<" microseconds\n";
-        */
+        gpu_parallel_duration += duration_micro.count();
+
         // needed for next iterations's tree creation on cpu
         cudaMemcpy( positions.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
     }
@@ -1100,20 +1005,19 @@ int main() {
     std::srand(static_cast<unsigned>(std::time(0)));
 
     // structures
+    
     Masses masses;
     Positions positions;
     Velocities velocities;
 
     // initialization
+
+    initializeCpu(masses, positions, velocities, false);
     //initializeGpu(masses, positions, velocities);
-    
-    //initializeMasses(masses, LOWER_M, HIGHER_M, true, "masses_init.txt");
-    //initializeVectors(positions, LOWER_P, HIGHER_P, true, "positions_init.txt");
-    //initializeVectors(velocities, LOWER_V, HIGHER_v, true, "velocities_init.txt");
 
     // load saved initialization values
-    loadSimulationDataFromText("masses_init.txt", "positions_init.txt", "velocities_init.txt",
-                                   N_BODIES, masses, positions, velocities);
+    // loadSimulationDataFromText("masses_init.txt", "positions_init.txt", "velocities_init.txt",
+    //                               N_BODIES, masses, positions, velocities);
 
     // cpu simulation run
 
@@ -1148,14 +1052,8 @@ int main() {
 
     std::cout<<std::endl<<std::endl;
 
-    std::cout << "CPU important computation took " << cpu_important_duration << " microseconds." << std::endl;
-    std::cout << "GPU important computation took " << gpu_important_duration << " microseconds." << std::endl;
-
-    std::cout<<std::endl<<std::endl;
-
-    std::cout << "GPU tree building took " << gpu_tree_building_duration << " microseconds." << std::endl;
-
-    std::cout<<std::endl<<std::endl;
+    std::cout << "CPU 'parallel' computation took " << cpu_parallel_duration << " microseconds." << std::endl;
+    std::cout << "GPU parallel computation took " << gpu_parallel_duration << " microseconds." << std::endl;
 
     return 0;
 }
