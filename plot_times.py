@@ -46,6 +46,7 @@ def parse_gpu_important_times(filename):
     # Example: "40000, 1024*16, 10, ..."
     line_thread_regex = re.compile(r"^\s*(\d+)\s*,\s*([^,]+)\s*,\s*(\d+)\s*,")
     gpu_important_regex = re.compile(r"GPU important computation took\s+(\d+)\s+microseconds")
+    #gpu_important_regex = re.compile(r"GPU total computation took\s+(\d+)\s+milliseconds.")
 
     last_thread = None
 
