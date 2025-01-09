@@ -348,9 +348,8 @@ void QuadInsert(int particle_index, int node_index, const Positions& positions, 
     if (node[TOTAL_MASS] > 0.0 && node[PARTICLE_INDEX] > -1) {
         // Subdivide the node by creating children
         for (int i = 0; i < 4; ++i) {
-            // i guess remove this
             if (quadtree.size() >= QUADTREE_MAX_SIZE) {
-                std::cerr << "Quadtree reached maximum size during subdivision." << std::endl;
+                std::cout << "Quadtree reached maximum size during subdivision." << std::endl;
                 return; // Prevent exceeding max size
             }
 
@@ -1012,12 +1011,12 @@ int main() {
 
     // initialization
 
-    initializeCpu(masses, positions, velocities, false);
+    //initializeCpu(masses, positions, velocities, false);
     //initializeGpu(masses, positions, velocities);
 
     // load saved initialization values
-    // loadSimulationDataFromText("masses_init.txt", "positions_init.txt", "velocities_init.txt",
-    //                               N_BODIES, masses, positions, velocities);
+    loadSimulationDataFromText("masses_init.txt", "positions_init.txt", "velocities_init.txt",
+                                   N_BODIES, masses, positions, velocities);
 
     // cpu simulation run
 

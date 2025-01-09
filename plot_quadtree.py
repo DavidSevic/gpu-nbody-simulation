@@ -44,7 +44,7 @@ def parse_quadtree_file(filename):
             results.append((depth, x_min, x_max, y_min, y_max, total_mass, occupantPositions))
     return results
 
-def plot_quadtree(quadtree_data):
+def plot_quadtree(quadtree_data, output_filename):
     """
     Plots each node's bounding box (rectangle).
     Also plots occupant positions as red dots.
@@ -76,12 +76,19 @@ def plot_quadtree(quadtree_data):
     ax.set_aspect('equal', 'box')
     ax.set_xlabel("X")
     ax.set_ylabel("Y")
-    plt.title("Barnes-Hut Quadtree Visualization")
+    #plt.title("Barnes-Hut Quadtree Visualization")
+
+    # Save the plot as an image
+    plt.savefig(output_filename, dpi=300)
     plt.show()
+    plt.close()
 
 if __name__ == "__main__":
-    filename = sys.argv[1]#"quadtree.txt"
+    filename = sys.argv[1]  # "quadtree.txt"
+
+    # Modify the filename to include '_png' before '.txt'
+    output_filename = filename.replace(".txt", "_png.png")
 
     data = parse_quadtree_file(filename)
 
-    plot_quadtree(data)
+    plot_quadtree(data, output_filename)
