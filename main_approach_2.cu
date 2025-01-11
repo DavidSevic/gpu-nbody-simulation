@@ -59,7 +59,8 @@ const int PARTICLE_INDEX = 11;
 
 const double THETA = 5e-1;
 const int QUADTREE_MAX_DEPTH = 10;
-const int QUADTREE_MAX_SIZE = static_cast<int>(pow(4, QUADTREE_MAX_DEPTH));
+//const int QUADTREE_MAX_SIZE = static_cast<int>(pow(4, QUADTREE_MAX_DEPTH));
+const int QUADTREE_MAX_SIZE = static_cast<int>((pow(4, QUADTREE_MAX_DEPTH) - 1) / 3);
 
 using Quadrant = std::array<double, QUADRANT_SIZE>;
 std::vector<Quadrant> quadtree;
@@ -889,7 +890,16 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     cudaMalloc( (void**)&velocities_d, N_BODIES * N_DIM * sizeof(double));
     cudaMalloc( (void**)&accelerations_d, N_BODIES * N_DIM * sizeof(double));
     cudaMalloc( (void**)&forces_d, N_BODIES * N_DIM * sizeof(double));
-    cudaMalloc( (void**)&quadtree_d, N_BODIES * 4 * sizeof(Quadrant)); // realistic max size
+    ///*
+    //cudaMalloc( (void**)&quadtree_d, N_BODIES * 4 * sizeof(Quadrant)); // realistic max size
+    //std::cout<<"N_BODIES * 4: "<<N_BODIES * 4<<std::endl;
+    //*/
+    /*
+    size_t realistic_size = std::min(((4 * N_BODIES) / 3), QUADTREE_MAX_SIZE);
+    cudaMalloc( (void**)&quadtree_d, realistic_size * sizeof(Quadrant));
+    std::cout<<"realistic_size: "<<realistic_size<<std::endl;
+    std::cout<<"QUADTREE_MAX_SIZE: "<<QUADTREE_MAX_SIZE<<std::endl;
+    */
 
     // copying initial values to GPU
     cudaMemcpy( masses_d, masses.data(), N_BODIES * sizeof(double), cudaMemcpyHostToDevice);
@@ -909,7 +919,12 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
 
         // build the tree on cpu
         quadtree = buildTree(positions, masses);
+
+        // debug
+        //std::cout<<"quadtree.size(): "<<quadtree.size()<<std::endl;
         
+        cudaMalloc( (void**)&quadtree_d, quadtree.size() * sizeof(Quadrant));
+
         // writing tree info in first and last iteration
         if (step == 0)
             TraverseTreeToFile(0, tree_file_init, positions);
@@ -961,6 +976,9 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
 
         // needed for next iterations's tree creation on cpu
         cudaMemcpy( positions.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
+    
+        // deallocate quadtree memory used in this iteration
+        cudaFree(quadtree_d);
     }
 
     // deallocation of GPU memory
@@ -969,7 +987,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     cudaFree(velocities_d);
     cudaFree(accelerations_d);
     cudaFree(forces_d);
-    cudaFree(quadtree_d);
+    //cudaFree(quadtree_d);
 
     // closing of used files
     tree_file_init.close();
