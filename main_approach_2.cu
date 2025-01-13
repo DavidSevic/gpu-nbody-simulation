@@ -1,9 +1,9 @@
 #ifndef N_BODIES
-#define N_BODIES 1000 * 40
+#define N_BODIES 64//1000 * 40
 #endif
 
 #ifndef N_THREADS
-#define N_THREADS 1024 * 1
+#define N_THREADS 32//1024 * 1
 #endif
 
 #ifndef N_SIMULATIONS
@@ -71,6 +71,8 @@ const int SHARED_MEM_BANKS_NUM = 32;
 
 std::chrono::microseconds::rep cpu_parallel_duration = 0;
 std::chrono::microseconds::rep gpu_parallel_duration = 0;
+//debug
+std::chrono::microseconds::rep alloc_duration = 0;
 
 
 double generateRandom(double lower, double upper) {
@@ -891,15 +893,16 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     cudaMalloc( (void**)&accelerations_d, N_BODIES * N_DIM * sizeof(double));
     cudaMalloc( (void**)&forces_d, N_BODIES * N_DIM * sizeof(double));
     ///*
-    //cudaMalloc( (void**)&quadtree_d, N_BODIES * 4 * sizeof(Quadrant)); // realistic max size
-    //std::cout<<"N_BODIES * 4: "<<N_BODIES * 4<<std::endl;
+    /*cudaMalloc( (void**)&quadtree_d, ((N_BODIES * 4) / 3) * sizeof(Quadrant)); // realistic max size
+    std::cout<<"(N_BODIES * 4) / 3): "<<(N_BODIES * 4) / 3<<std::endl;
+    std::cout<<"QUADTREE_MAX_SIZE: "<<QUADTREE_MAX_SIZE<<std::endl;
+    */
     //*/
-    /*
+    
     size_t realistic_size = std::min(((4 * N_BODIES) / 3), QUADTREE_MAX_SIZE);
     cudaMalloc( (void**)&quadtree_d, realistic_size * sizeof(Quadrant));
     std::cout<<"realistic_size: "<<realistic_size<<std::endl;
     std::cout<<"QUADTREE_MAX_SIZE: "<<QUADTREE_MAX_SIZE<<std::endl;
-    */
 
     // copying initial values to GPU
     cudaMemcpy( masses_d, masses.data(), N_BODIES * sizeof(double), cudaMemcpyHostToDevice);
@@ -913,6 +916,8 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     auto duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    //debug
+    auto duration_micro_alloc = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
 
     for (int step = 0; step < N_SIMULATIONS; ++step) {
         absolute_t += DELTA_T;
@@ -921,10 +926,20 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         quadtree = buildTree(positions, masses);
 
         // debug
-        //std::cout<<"quadtree.size(): "<<quadtree.size()<<std::endl;
+        std::cout<<"quadtree.size(): "<<quadtree.size()<<std::endl;
+
+
+        //debug
+        /*start = std::chrono::high_resolution_clock::now();
         
         cudaMalloc( (void**)&quadtree_d, quadtree.size() * sizeof(Quadrant));
 
+        //debug
+        end = std::chrono::high_resolution_clock::now();
+        duration_micro_alloc = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        alloc_duration += duration_micro_alloc.count();
+        std::cout<<"alloc_duration: "<<duration_micro_alloc.count()<<std::endl;
+        */
         // writing tree info in first and last iteration
         if (step == 0)
             TraverseTreeToFile(0, tree_file_init, positions);
@@ -976,9 +991,19 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
 
         // needed for next iterations's tree creation on cpu
         cudaMemcpy( positions.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
-    
+
+        //debug
+        /*start = std::chrono::high_resolution_clock::now();
+
         // deallocate quadtree memory used in this iteration
         cudaFree(quadtree_d);
+
+        //debug
+        end = std::chrono::high_resolution_clock::now();
+        duration_micro_alloc = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        alloc_duration += duration_micro_alloc.count();
+        std::cout<<"alloc_duration: "<<duration_micro_alloc.count()<<std::endl;
+        */
     }
 
     // deallocation of GPU memory
@@ -987,7 +1012,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     cudaFree(velocities_d);
     cudaFree(accelerations_d);
     cudaFree(forces_d);
-    //cudaFree(quadtree_d);
+    cudaFree(quadtree_d);
 
     // closing of used files
     tree_file_init.close();
@@ -1071,6 +1096,7 @@ int main() {
 
     std::cout << "CPU 'parallel' computation took " << cpu_parallel_duration << " microseconds." << std::endl;
     std::cout << "GPU parallel computation took " << gpu_parallel_duration << " microseconds." << std::endl;
+    std::cout << "alloc duration took " << alloc_duration << " microseconds." << std::endl;
 
     return 0;
 }
