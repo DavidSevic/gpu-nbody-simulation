@@ -1,9 +1,9 @@
 #ifndef N_BODIES
-#define N_BODIES 64//1000 * 40
+#define N_BODIES 1000 * 40
 #endif
 
 #ifndef N_THREADS
-#define N_THREADS 32//1024 * 1
+#define N_THREADS 1024 * 1
 #endif
 
 #ifndef N_SIMULATIONS
@@ -385,7 +385,6 @@ void QuadInsert(int particle_index, int node_index, const Positions& positions, 
         node[TOTAL_MASS] = 0.0;
         node[PARTICLE_INDEX] = -1;
         quadtree[node_index] = node;
-
         // Insert the existing particle into the appropriate child
         int existing_child_index = DetermineChild(existing_pos, node);
         QuadInsert(existing_particle_index, node[CHILDREN_0 + existing_child_index], positions, masses, current_depth + 1);
@@ -460,8 +459,8 @@ void TraverseTreeToFile(int node_index, std::ofstream& file,
         file << " occupantIndex=" << occupantIdx
              << " occupantPos=(" << positions[occupantIdx][0]
              << "," << positions[occupantIdx][1] << ")";
-    } else if (node[TOTAL_MASS] > 0) {
-        // index not important, but we put quadrant center of mass
+    } else if (node[TOTAL_MASS] > 0 ) {//&& node[CHILDREN_0] == -1) {
+        // two cases: parent node (has children) or max_depth node with multiple particles (no children)
         file << " occupantIndex=" << occupantIdx
              << " occupantPos=(" << node[CENTER_OF_MASS_X]
              << "," << node[CENTER_OF_MASS_Y] << ")";
@@ -899,7 +898,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     */
     //*/
     
-    size_t realistic_size = std::min(((4 * N_BODIES) / 3), QUADTREE_MAX_SIZE);
+    size_t realistic_size = std::min(4 * N_BODIES, QUADTREE_MAX_SIZE);
     cudaMalloc( (void**)&quadtree_d, realistic_size * sizeof(Quadrant));
     std::cout<<"realistic_size: "<<realistic_size<<std::endl;
     std::cout<<"QUADTREE_MAX_SIZE: "<<QUADTREE_MAX_SIZE<<std::endl;
