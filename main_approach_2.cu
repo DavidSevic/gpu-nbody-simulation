@@ -7,7 +7,7 @@
 #endif
 
 #ifndef N_SIMULATIONS
-#define N_SIMULATIONS 10
+#define N_SIMULATIONS 20
 #endif
 
 #include <iostream>
@@ -24,7 +24,7 @@
 #include <sstream>
 
 // parameters
-const double G = 6.67e-11;
+const double G = 6.67e-16;//6.67e-11;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
 const double LOWER_M = 1e-1;
@@ -897,7 +897,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     std::cout<<"QUADTREE_MAX_SIZE: "<<QUADTREE_MAX_SIZE<<std::endl;
     */
     //*/
-    
+    // allocation of maximum size quadtree
     size_t realistic_size = std::min(4 * N_BODIES, QUADTREE_MAX_SIZE);
     cudaMalloc( (void**)&quadtree_d, realistic_size * sizeof(Quadrant));
     std::cout<<"realistic_size: "<<realistic_size<<std::endl;
@@ -958,8 +958,10 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         int blockSize = 0;
         if (sharedMemSize == 0) {
             blockSize = 32;
+            std::cout<<"shared memory NO"<<std::endl;
         } else {
-            blockSize = 32;
+            blockSize = 128;
+            std::cout<<"shared memory YES"<<std::endl;
         }
 
         // defiining dimensions
