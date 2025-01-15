@@ -7,7 +7,7 @@
 #endif
 
 #ifndef N_SIMULATIONS
-#define N_SIMULATIONS 20
+#define N_SIMULATIONS 2
 #endif
 
 #include <iostream>
@@ -24,7 +24,7 @@
 #include <sstream>
 
 // parameters
-const double G = 6.67e-16;//6.67e-11;
+const double G = 0.8 * 6.67e-15;//6.67e-11;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
 const double LOWER_M = 1e-1;
@@ -917,6 +917,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     auto duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
     //debug
     auto duration_micro_alloc = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+    auto duration_force_computing = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
 
     for (int step = 0; step < N_SIMULATIONS; ++step) {
         absolute_t += DELTA_T;
@@ -954,13 +955,16 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         // use shared memory if tree can fit in it
         int sharedMemSize = quadtreeMemSize <= MAX_SHARED_MEM_PER_BLOCK_B ? quadtreeMemSize : 0;
 
-        // defining blocksizes for global and shared case
+        //debug
+        //sharedMemSize = 0;
+
+        // defining blocksizes for global and shared memory cases
         int blockSize = 0;
         if (sharedMemSize == 0) {
             blockSize = 32;
             std::cout<<"shared memory NO"<<std::endl;
         } else {
-            blockSize = 128;
+            blockSize = 64;
             std::cout<<"shared memory YES"<<std::endl;
         }
 
@@ -976,8 +980,13 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         computeForcesGpu<<<dimGrid, dimBlock, sharedMemSize>>>(positions_d, masses_d, forces_d, quadtree_d, quadtree.size(), sharedMemSize > 0);
         cudaDeviceSynchronize();
 
+        //debug
+        end = std::chrono::high_resolution_clock::now();
+        duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
+        std::cout<<"force calculation in step: "<<step<<" lasted "<<duration_micro.count()<<" microseconds"<<std::endl;
+
         // defining dimensions for rest of the calculation
-        blockSize = 128;
+        blockSize = 64;
         dimBlock = dim3(blockSize);
         // depends on N_THREADS for arbitrary number of threads approach
         dimGrid = dim3((N_THREADS + blockSize - 1) / blockSize);
