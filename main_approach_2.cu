@@ -7,7 +7,7 @@
 #endif
 
 #ifndef N_SIMULATIONS
-#define N_SIMULATIONS 2
+#define N_SIMULATIONS 10
 #endif
 
 #include <iostream>
@@ -300,7 +300,7 @@ int DetermineChild(const Vector& pos, const Quadrant& node) {
 
 void QuadInsert(int particle_index, int node_index, const Positions& positions, const Masses& masses, int current_depth) {
     // Check if current depth exceeds maximum depth
-    if (current_depth > QUADTREE_MAX_DEPTH) {
+    if (current_depth >= QUADTREE_MAX_DEPTH) {
         // At max depth, aggregate mass and center of mass
         Quadrant& node = quadtree[node_index];
         const Vector& pos = positions[particle_index];
@@ -352,7 +352,7 @@ void QuadInsert(int particle_index, int node_index, const Positions& positions, 
         // Subdivide the node by creating children
         for (int i = 0; i < 4; ++i) {
             if (quadtree.size() >= QUADTREE_MAX_SIZE) {
-                std::cout << "Quadtree reached maximum size during subdivision." << std::endl;
+                std::cout << "Quadtree reached maximum size during subdivision." << "current depth: " << current_depth << std::endl;
                 return; // Prevent exceeding max size
             }
 
@@ -396,8 +396,8 @@ void QuadInsert(int particle_index, int node_index, const Positions& positions, 
 }
 
 __device__ bool push(int stack[], int *top, int value) {
-    if (*top >= QUADTREE_MAX_DEPTH * 3 - 1) {
-        // Stack overflow
+    if (*top >= QUADTREE_MAX_DEPTH * 3) {
+        // stack overflow
         return false;
     }
     stack[++(*top)] = value;
@@ -406,7 +406,7 @@ __device__ bool push(int stack[], int *top, int value) {
 
 __device__ bool pop(int stack[], int *top, int *value) {
     if (*top < 0) {
-        // Stack underflow
+        // stack underflow
         return false;
     }
     *value = stack[(*top)--];
@@ -656,12 +656,17 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
     // repeat for multiple bodies
     for(int body_i = idx; body_i < N_BODIES; body_i += N_THREADS) {
         
+        
+        //forces[body_i * 2 + 0]  = 0;
+        //forces[body_i * 2 + 1]  = 0;
+        // better to use registers multiple times and one time store in global mem
         double sum[2] = {0, 0};
 
-        double pos_i[2] = {positions[body_i * 2 + 0], positions[body_i * 2 + 1]};
 
-        // max size of the stack is the max depth of the quadtree * 3
-        int nodeStack[QUADTREE_MAX_DEPTH * 3];
+        //double pos_i[2] = {positions[body_i * 2 + 0], positions[body_i * 2 + 1]};
+
+        // max size of the stack is the max depth of the quadtree * 3 + 1
+        int nodeStack[QUADTREE_MAX_DEPTH * 3 + 1];
         int stack_top = -1;
 
         // push the root node (rootIndex is 0)
@@ -684,8 +689,8 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
             const int ACCESS_INDEX = useSharedMem ? SHARED_MEM_BANKS_NUM : 1;
 
             // if this node has zero mass, skip
-            double nodeMass = node[ACCESS_INDEX * TOTAL_MASS];
-            if (nodeMass <= 1e-15) {
+            //double nodeMass = node[ACCESS_INDEX * TOTAL_MASS];
+            if (node[ACCESS_INDEX * TOTAL_MASS] <= 1e-15) {
                 continue;
             }
 
@@ -698,8 +703,8 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
 
             // compute displacement from body idx to this node's center of mass
             double displacement[2] = {0, 0};
-            displacement[0] = node[ACCESS_INDEX * CENTER_OF_MASS_X] - pos_i[0];
-            displacement[1] = node[ACCESS_INDEX * CENTER_OF_MASS_Y] - pos_i[1];
+            displacement[0] = node[ACCESS_INDEX * CENTER_OF_MASS_X] - positions[body_i * 2 + 0];//pos_i[0];
+            displacement[1] = node[ACCESS_INDEX * CENTER_OF_MASS_Y] - positions[body_i * 2 + 1];//pos_i[1];
 
             double distance_sq = displacement[0]*displacement[0] + displacement[1]*displacement[1];
             double distance    = std::sqrt(distance_sq) + 1e-15; // small offset to avoid division by zero
@@ -719,7 +724,7 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
                 }
 
                 // accumulate approximate force
-                double force_mag = (G * masses[body_i] * nodeMass) / (distance_sq);
+                double force_mag = (G * masses[body_i] * node[ACCESS_INDEX * TOTAL_MASS]) / (distance_sq);
 
                 // normalized direction
                 double nx = displacement[0] / distance;
@@ -727,6 +732,8 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
 
                 sum[0] += force_mag * nx;
                 sum[1] += force_mag * ny;
+                // forces[body_i * 2 + 0] += force_mag * nx;
+                // forces[body_i * 2 + 1] += force_mag * ny;
             }
             else
             {
@@ -983,7 +990,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         //debug
         end = std::chrono::high_resolution_clock::now();
         duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        std::cout<<"force calculation in step: "<<step<<" lasted "<<duration_micro.count()<<" microseconds"<<std::endl;
+        //std::cout<<"force calculation in step: "<<step<<" lasted "<<duration_micro.count()<<" microseconds"<<std::endl;
 
         // defining dimensions for rest of the calculation
         blockSize = 64;
@@ -1106,7 +1113,7 @@ int main() {
 
     std::cout << "CPU 'parallel' computation took " << cpu_parallel_duration << " microseconds." << std::endl;
     std::cout << "GPU parallel computation took " << gpu_parallel_duration << " microseconds." << std::endl;
-    std::cout << "alloc duration took " << alloc_duration << " microseconds." << std::endl;
+    //std::cout << "alloc duration took " << alloc_duration << " microseconds." << std::endl;
 
     return 0;
 }
