@@ -987,7 +987,7 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         //std::cout<<"force calculation in step: "<<step<<" lasted "<<duration_micro.count()<<" microseconds"<<std::endl;
 
         // defining dimensions for rest of the calculation
-        blockSize = 64;
+        blockSize = 32;
         dimBlock = dim3(blockSize);
         // depends on N_THREADS for arbitrary number of threads approach
         dimGrid = dim3((N_THREADS + blockSize - 1) / blockSize);
