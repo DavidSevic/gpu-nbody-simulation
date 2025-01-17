@@ -24,7 +24,7 @@
 #include <sstream>
 
 // parameters
-const double G = 0.8 * 6.67e-15;//6.67e-11;
+const double G = 6.67e-11;//0.8 * 6.67e-15;//6.67e-11;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
 const double LOWER_M = 1e-1;
@@ -68,6 +68,11 @@ std::vector<Quadrant> quadtree;
 const int MAX_BLOCK_SIZE = 1024; // physical limit
 const int MAX_SHARED_MEM_PER_BLOCK_B = 48 * 1024;
 const int SHARED_MEM_BANKS_NUM = 32;
+
+const int FIRST_KERNEL_REGISTERS_NUM = 70;
+const int SECOND_KERNEL_REGISTERS_NUM = 43;
+const int THIRD_KERNEL_REGISTERS_NUM = 32;
+
 
 std::chrono::microseconds::rep cpu_parallel_duration = 0;
 std::chrono::microseconds::rep gpu_parallel_duration = 0;
@@ -156,6 +161,62 @@ void loadSimulationDataFromText(const std::string& massesFile,
     loadVectors(velocitiesFile, velocities);
 
     std::cout << "Loaded " << n_bodies << " bodies from text files." << std::endl;
+}
+
+int getOptimalBlockSize(int registersPerThread, int sharedMemPerBlock = 0, bool print=false) {
+
+    // GPU limitations (NVIDIA T600)
+    const int registersPerSM       = 65536;    // Total registers per SM
+    const int maxThreadsPerSM      = 1024;     // Max threads per SM
+    const int maxBlocksPerSM       = 16;       // Max blocks per SM
+    const int threadsPerBlockLimit = 1024;     // Max threads per block
+    const int threadsPerWarp       = 32;       // Threads per warp
+    const int maxWarpsPerSM        = 32;       // Max warps per SM
+    const int maxSharedMemPerSM    = 65536;    // Max shared memory per SM (bytes)
+
+    // how many blocks per SM by shared memory limit
+    int blocksPerSM_sharedMem = maxSharedMemPerSM / (sharedMemPerBlock > 0 ? sharedMemPerBlock : 1);
+
+    // how many threads can fit by register usage
+    int threadsPerSM_registers = registersPerSM / registersPerThread;
+
+    // effective blocks per SM
+    int effectiveBlocksPerSM = std::min(blocksPerSM_sharedMem, maxBlocksPerSM);
+
+    // effective threads per SM
+    int effectiveThreadsPerSM = std::min(threadsPerSM_registers, maxThreadsPerSM);
+
+    // effective optimal blocksize
+    int optimalBlockSize = effectiveThreadsPerSM / effectiveBlocksPerSM;
+
+    // round up to be a multiple of warpsize
+    optimalBlockSize = (optimalBlockSize / threadsPerWarp) * threadsPerWarp;
+
+    // threads per block limit
+    optimalBlockSize = std::min(optimalBlockSize, threadsPerBlockLimit);
+
+    // actual used warps
+    int warpsPerSM_actual = effectiveThreadsPerSM / threadsPerWarp;
+
+    // calculate occupancy percentage
+    float occupancyPercentage = (static_cast<float>(warpsPerSM_actual) / maxWarpsPerSM) * 100.0f;
+
+    if (print == true) {
+        std::cout << "===== calculateLaunchConfig =====" << std::endl;
+        std::cout << "Registers per SM:              " << registersPerSM        << std::endl;
+        std::cout << "Registers per thread (kernel): " << registersPerThread    << std::endl;
+        std::cout << "Shared mem per block (kernel): " << sharedMemPerBlock     <<" bytes"<< std::endl;
+        std::cout << "Blocks per SM (max):           " << maxBlocksPerSM        << std::endl;
+        std::cout << "Threads per SM (max):          " << maxThreadsPerSM       << std::endl;
+        std::cout << "Blocks per SM (shared mem):    " << (sharedMemPerBlock > 0 ? blocksPerSM_sharedMem : '/') << std::endl;
+        std::cout << "Effective blocks per SM:       " << effectiveBlocksPerSM  << std::endl;
+        std::cout << "Effective threads per SM:      " << effectiveThreadsPerSM << std::endl;
+        std::cout << "Optimal block size:            " << optimalBlockSize      << std::endl;
+        std::cout << "Occupancy percentage:          " << occupancyPercentage   << "%"<< std::endl;
+        std::cout << "================================" << std::endl;
+    }
+
+    return optimalBlockSize;
 }
 
 __global__ void initializeCurandStatesGpu(curandState* states, unsigned long seed) {
@@ -255,7 +316,7 @@ void initializeGpu(Masses& masses, Positions& positions, Positions& velocities) 
     cudaMalloc( (void**)&velocities_d, N_BODIES * N_DIM * sizeof(double));
 
     // calculate block and grid
-    int blockSize = (N_BODIES <= 128) ? N_BODIES : 128;
+    int blockSize = getOptimalBlockSize(THIRD_KERNEL_REGISTERS_NUM);//(N_BODIES <= 128) ? N_BODIES : 128;
 
     dim3 dimBlock(blockSize);
 	dim3 dimGrid((N_THREADS + blockSize - 1) / blockSize);
@@ -946,31 +1007,44 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
             TraverseTreeToFile(0, tree_file_init, positions);
         else if (step == N_SIMULATIONS - 1)
             TraverseTreeToFile(0, tree_file_final, positions);
-        
+
         // copy tree to gpu
         cudaMemcpy( quadtree_d, quadtree.data(), quadtree.size() * sizeof(Quadrant), cudaMemcpyHostToDevice);
 
-        // calculate the quadtree size
+        // // calculate the quadtree size
         int quadtreeMemSize = quadtree.size() * sizeof(Quadrant);
 
-        // use shared memory if tree can fit in it
+        // // use shared memory if tree can fit in it
         int sharedMemSize = quadtreeMemSize <= MAX_SHARED_MEM_PER_BLOCK_B ? quadtreeMemSize : 0;
 
-        //debug
-        //sharedMemSize = 0;
+        std::cout<<"sharedMemSize: "<<(sharedMemSize > 0 ? " yes " : " no ")<<std::endl;
 
-        // defining blocksizes for global and shared memory cases
-        int blockSize = 0;
-        if (sharedMemSize == 0) {
-            blockSize = 32;
-            std::cout<<"shared memory NO"<<std::endl;
-        } else {
-            blockSize = 64;
-            std::cout<<"shared memory YES"<<std::endl;
-        }
+        // //debug
+        // //sharedMemSize = 0;
 
-        // defiining dimensions
+        // // defining blocksizes for global and shared memory cases
+        // int blockSize = 0;
+        // if (sharedMemSize == 0) {
+        //     blockSize = 32;
+        //     std::cout<<"shared memory NO"<<std::endl;
+        // } else {
+        //     blockSize = 64;
+        //     std::cout<<"shared memory YES"<<std::endl;
+        // }
+
+        // // defiining dimensions
+        // dim3 dimBlock(blockSize);
+        // // depends on N_THREADS for arbitrary number of threads approach
+        // dim3 dimGrid((N_THREADS + blockSize - 1) / blockSize);
+
+        //int registersUsed = 70;
+
+        // calculate blocksize
+        int blockSize = getOptimalBlockSize(FIRST_KERNEL_REGISTERS_NUM, sharedMemSize);
+        
+        // defining dimensions
         dim3 dimBlock(blockSize);
+        
         // depends on N_THREADS for arbitrary number of threads approach
         dim3 dimGrid((N_THREADS + blockSize - 1) / blockSize);
 
@@ -987,8 +1061,17 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         //std::cout<<"force calculation in step: "<<step<<" lasted "<<duration_micro.count()<<" microseconds"<<std::endl;
 
         // defining dimensions for rest of the calculation
-        blockSize = 32;
+        //blockSize = 32;
+
+        // new
+
+        // registersUsed = 43;
+        
+        blockSize = getOptimalBlockSize(SECOND_KERNEL_REGISTERS_NUM);
+
+        // Set up kernel launch configuration
         dimBlock = dim3(blockSize);
+        
         // depends on N_THREADS for arbitrary number of threads approach
         dimGrid = dim3((N_THREADS + blockSize - 1) / blockSize);
 
@@ -1066,11 +1149,11 @@ int main() {
     // initialization
 
     //initializeCpu(masses, positions, velocities, false);
-    //initializeGpu(masses, positions, velocities);
+    initializeGpu(masses, positions, velocities);
 
     // load saved initialization values
-    loadSimulationDataFromText("masses_init.txt", "positions_init.txt", "velocities_init.txt",
-                                   N_BODIES, masses, positions, velocities);
+    // loadSimulationDataFromText("masses_init.txt", "positions_init.txt", "velocities_init.txt",
+    //                                N_BODIES, masses, positions, velocities);
 
     // cpu simulation run
 
