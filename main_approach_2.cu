@@ -632,21 +632,15 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
     double* quadtree = globalMemQuadtree;
     
     if (useSharedMem) {
-        // adding SHARED_MEM_BANKS_NUM padding to avoid bank conflicts
-        for (int i = threadIdx.x; i < quadtreeNumElem; i += blockDim.x) {
-            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CHILDREN_0] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_0];
-            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CHILDREN_1] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_1];
-            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CHILDREN_2] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_2];
-            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CHILDREN_3] = globalMemQuadtree[i * QUADRANT_SIZE + CHILDREN_3];
-            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CENTER_OF_MASS_X] = globalMemQuadtree[i * QUADRANT_SIZE + CENTER_OF_MASS_X];
-            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * CENTER_OF_MASS_Y] = globalMemQuadtree[i * QUADRANT_SIZE + CENTER_OF_MASS_Y];
-            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * TOTAL_MASS] = globalMemQuadtree[i * QUADRANT_SIZE + TOTAL_MASS];
-            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * X_MIN] = globalMemQuadtree[i * QUADRANT_SIZE + X_MIN];
-            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * X_MAX] = globalMemQuadtree[i * QUADRANT_SIZE + X_MAX];
-            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * Y_MIN] = globalMemQuadtree[i * QUADRANT_SIZE + Y_MIN];
-            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * Y_MAX] = globalMemQuadtree[i * QUADRANT_SIZE + Y_MAX];
-            sharedMemQuadtree[i + SHARED_MEM_BANKS_NUM * PARTICLE_INDEX] = globalMemQuadtree[i * QUADRANT_SIZE + PARTICLE_INDEX];
-        }
+
+       for (int i = threadIdx.x; i < quadtreeNumElem * QUADRANT_SIZE; i += blockDim.x) {
+            /*double val = globalMemQuadtree[i];
+            int quadrantIdx = i / QUADRANT_SIZE;
+            int fieldIdx = i % QUADRANT_SIZE;
+
+            sharedMemQuadtree[quadrantIdx + SHARED_MEM_BANKS_NUM * fieldIdx] = val;*/
+            sharedMemQuadtree[i / QUADRANT_SIZE + SHARED_MEM_BANKS_NUM * (i % QUADRANT_SIZE)] = globalMemQuadtree[i];
+       }
 
         __syncthreads();
 
