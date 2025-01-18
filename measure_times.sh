@@ -6,12 +6,12 @@ bodies=(40000)
 # Thread counts (unique values, not repeated)
 threads=(1 2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384 32768 40000)
 # Number of simulations per configuration
-simulations=(20)
+simulations=(10)
 # Number of repetitions for each thread count
 repeats=5
 
 # Output file for results
-output="results_nb_40_000_ns_20_blocksize_32kb_128kb_.txt"
+output="newest_nb_40000_ns_10_bs_32.txt"
 echo "n_bodies, n_threads, n_simulations, runtime" > $output
 
 for n_b in "${bodies[@]}"; do

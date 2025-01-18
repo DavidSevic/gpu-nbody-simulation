@@ -6,10 +6,10 @@ threads=(2 4 8 16 32 64 128 256 512 1024 2048 4096 8192 16384 32768 40000)
 simulations=(10)
 
 # Number of repetitions per configuration
-repetitions=10
+repetitions=5
 
 # Output file for results
-output="results_ns_10.txt"
+output="newest_ns_10_bs_32.txt"
 echo "n_bodies, n_threads, n_simulations, repetition, runtime" > $output
 
 # Iterate over unique bodies and threads values

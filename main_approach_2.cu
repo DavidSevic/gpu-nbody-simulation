@@ -24,7 +24,9 @@
 #include <sstream>
 
 // parameters
-const double G = 6.67e-11;//0.8 * 6.67e-15;//6.67e-11;
+const double G = 6.67e-11;
+// const double G = 0.07 * 6.67e-15;
+// const double G = 6.67e-13;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
 const double LOWER_M = 1e-1;
@@ -698,7 +700,6 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
             /*double val = globalMemQuadtree[i];
             int quadrantIdx = i / QUADRANT_SIZE;
             int fieldIdx = i % QUADRANT_SIZE;
-
             sharedMemQuadtree[quadrantIdx + SHARED_MEM_BANKS_NUM * fieldIdx] = val;*/
             sharedMemQuadtree[i / QUADRANT_SIZE + SHARED_MEM_BANKS_NUM * (i % QUADRANT_SIZE)] = globalMemQuadtree[i];
        }
@@ -1041,6 +1042,8 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
 
         // calculate blocksize
         int blockSize = getOptimalBlockSize(FIRST_KERNEL_REGISTERS_NUM, sharedMemSize);
+
+        std::cout<<"optimal blocksize for computing forces: "<<blockSize<<std::endl;
         
         // defining dimensions
         dim3 dimBlock(blockSize);
@@ -1149,11 +1152,11 @@ int main() {
     // initialization
 
     //initializeCpu(masses, positions, velocities, false);
-    initializeGpu(masses, positions, velocities);
+    //initializeGpu(masses, positions, velocities);
 
     // load saved initialization values
-    // loadSimulationDataFromText("masses_init.txt", "positions_init.txt", "velocities_init.txt",
-    //                                N_BODIES, masses, positions, velocities);
+    loadSimulationDataFromText("masses_init.txt", "positions_init.txt", "velocities_init.txt",
+                                    N_BODIES, masses, positions, velocities);
 
     // cpu simulation run
 
@@ -1161,7 +1164,7 @@ int main() {
 
     auto start_cpu = std::chrono::high_resolution_clock::now();
 
-    //runSimulationCpu(masses, positions_cpu, velocities);
+    runSimulationCpu(masses, positions_cpu, velocities);
 
     auto end_cpu = std::chrono::high_resolution_clock::now();
     auto duration_cpu = std::chrono::duration_cast<std::chrono::milliseconds>(end_cpu - start_cpu);
