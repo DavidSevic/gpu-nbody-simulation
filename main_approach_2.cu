@@ -1062,7 +1062,7 @@ int main() {
 
     // initialization
 
-    //initializeCpu(masses, positions, velocities, false);
+    //initializeCpu(masses, positions, velocities, true);
     initializeGpu(masses, positions, velocities);
 
     // load saved initialization values
