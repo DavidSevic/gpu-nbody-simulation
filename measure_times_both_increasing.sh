@@ -9,7 +9,7 @@ simulations=(10)
 repetitions=5
 
 # Output file for results
-output="newest_ns_10_bs_32.txt"
+output="second_scaling_results.txt"
 echo "n_bodies, n_threads, n_simulations, repetition, runtime" > $output
 
 # Iterate over unique bodies and threads values

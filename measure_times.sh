@@ -11,7 +11,7 @@ simulations=(10)
 repeats=5
 
 # Output file for results
-output="newest_nb_40000_ns_10_bs_32.txt"
+output="first_scaling_results.txt"
 echo "n_bodies, n_threads, n_simulations, runtime" > $output
 
 for n_b in "${bodies[@]}"; do

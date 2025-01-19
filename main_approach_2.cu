@@ -25,8 +25,6 @@
 
 // parameters
 const double G = 6.67e-11;
-// const double G = 0.07 * 6.67e-15;
-// const double G = 6.67e-13;
 const int N_DIM = 2;
 const double DELTA_T = 1.0;
 const double LOWER_M = 1e-1;
@@ -61,13 +59,12 @@ const int PARTICLE_INDEX = 11;
 
 const double THETA = 5e-1;
 const int QUADTREE_MAX_DEPTH = 10;
-//const int QUADTREE_MAX_SIZE = static_cast<int>(pow(4, QUADTREE_MAX_DEPTH));
 const int QUADTREE_MAX_SIZE = static_cast<int>((pow(4, QUADTREE_MAX_DEPTH) - 1) / 3);
 
 using Quadrant = std::array<double, QUADRANT_SIZE>;
 std::vector<Quadrant> quadtree;
 
-const int MAX_BLOCK_SIZE = 1024; // physical limit
+const int MAX_BLOCK_SIZE = 1024;
 const int MAX_SHARED_MEM_PER_BLOCK_B = 48 * 1024;
 const int SHARED_MEM_BANKS_NUM = 32;
 
@@ -78,8 +75,6 @@ const int THIRD_KERNEL_REGISTERS_NUM = 32;
 
 std::chrono::microseconds::rep cpu_parallel_duration = 0;
 std::chrono::microseconds::rep gpu_parallel_duration = 0;
-//debug
-std::chrono::microseconds::rep alloc_duration = 0;
 
 
 double generateRandom(double lower, double upper) {
@@ -318,7 +313,7 @@ void initializeGpu(Masses& masses, Positions& positions, Positions& velocities) 
     cudaMalloc( (void**)&velocities_d, N_BODIES * N_DIM * sizeof(double));
 
     // calculate block and grid
-    int blockSize = getOptimalBlockSize(THIRD_KERNEL_REGISTERS_NUM);//(N_BODIES <= 128) ? N_BODIES : 128;
+    int blockSize = getOptimalBlockSize(THIRD_KERNEL_REGISTERS_NUM);
 
     dim3 dimBlock(blockSize);
 	dim3 dimGrid((N_THREADS + blockSize - 1) / blockSize);
@@ -522,7 +517,7 @@ void TraverseTreeToFile(int node_index, std::ofstream& file,
         file << " occupantIndex=" << occupantIdx
              << " occupantPos=(" << positions[occupantIdx][0]
              << "," << positions[occupantIdx][1] << ")";
-    } else if (node[TOTAL_MASS] > 0 ) {//&& node[CHILDREN_0] == -1) {
+    } else if (node[TOTAL_MASS] > 0 ) {
         // two cases: parent node (has children) or max_depth node with multiple particles (no children)
         file << " occupantIndex=" << occupantIdx
              << " occupantPos=(" << node[CENTER_OF_MASS_X]
@@ -697,10 +692,6 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
     if (useSharedMem) {
 
        for (int i = threadIdx.x; i < quadtreeNumElem * QUADRANT_SIZE; i += blockDim.x) {
-            /*double val = globalMemQuadtree[i];
-            int quadrantIdx = i / QUADRANT_SIZE;
-            int fieldIdx = i % QUADRANT_SIZE;
-            sharedMemQuadtree[quadrantIdx + SHARED_MEM_BANKS_NUM * fieldIdx] = val;*/
             sharedMemQuadtree[i / QUADRANT_SIZE + SHARED_MEM_BANKS_NUM * (i % QUADRANT_SIZE)] = globalMemQuadtree[i];
        }
 
@@ -712,14 +703,7 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
     // repeat for multiple bodies
     for(int body_i = idx; body_i < N_BODIES; body_i += N_THREADS) {
         
-        
-        //forces[body_i * 2 + 0]  = 0;
-        //forces[body_i * 2 + 1]  = 0;
-        // better to use registers multiple times and one time store in global mem
         double sum[2] = {0, 0};
-
-
-        //double pos_i[2] = {positions[body_i * 2 + 0], positions[body_i * 2 + 1]};
 
         // max size of the stack is the max depth of the quadtree * 3 + 1
         int nodeStack[QUADTREE_MAX_DEPTH * 3 + 1];
@@ -745,7 +729,6 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
             const int ACCESS_INDEX = useSharedMem ? SHARED_MEM_BANKS_NUM : 1;
 
             // if this node has zero mass, skip
-            //double nodeMass = node[ACCESS_INDEX * TOTAL_MASS];
             if (node[ACCESS_INDEX * TOTAL_MASS] <= 1e-15) {
                 continue;
             }
@@ -759,8 +742,8 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
 
             // compute displacement from body idx to this node's center of mass
             double displacement[2] = {0, 0};
-            displacement[0] = node[ACCESS_INDEX * CENTER_OF_MASS_X] - positions[body_i * 2 + 0];//pos_i[0];
-            displacement[1] = node[ACCESS_INDEX * CENTER_OF_MASS_Y] - positions[body_i * 2 + 1];//pos_i[1];
+            displacement[0] = node[ACCESS_INDEX * CENTER_OF_MASS_X] - positions[body_i * 2 + 0];
+            displacement[1] = node[ACCESS_INDEX * CENTER_OF_MASS_Y] - positions[body_i * 2 + 1];
 
             double distance_sq = displacement[0]*displacement[0] + displacement[1]*displacement[1];
             double distance    = std::sqrt(distance_sq) + 1e-15; // small offset to avoid division by zero
@@ -788,8 +771,6 @@ __global__ void computeForcesGpu(double* positions, double* masses, double* forc
 
                 sum[0] += force_mag * nx;
                 sum[1] += force_mag * ny;
-                // forces[body_i * 2 + 0] += force_mag * nx;
-                // forces[body_i * 2 + 1] += force_mag * ny;
             }
             else
             {
@@ -954,17 +935,10 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     cudaMalloc( (void**)&velocities_d, N_BODIES * N_DIM * sizeof(double));
     cudaMalloc( (void**)&accelerations_d, N_BODIES * N_DIM * sizeof(double));
     cudaMalloc( (void**)&forces_d, N_BODIES * N_DIM * sizeof(double));
-    ///*
-    /*cudaMalloc( (void**)&quadtree_d, ((N_BODIES * 4) / 3) * sizeof(Quadrant)); // realistic max size
-    std::cout<<"(N_BODIES * 4) / 3): "<<(N_BODIES * 4) / 3<<std::endl;
-    std::cout<<"QUADTREE_MAX_SIZE: "<<QUADTREE_MAX_SIZE<<std::endl;
-    */
-    //*/
+
     // allocation of maximum size quadtree
     size_t realistic_size = std::min(4 * N_BODIES, QUADTREE_MAX_SIZE);
     cudaMalloc( (void**)&quadtree_d, realistic_size * sizeof(Quadrant));
-    std::cout<<"realistic_size: "<<realistic_size<<std::endl;
-    std::cout<<"QUADTREE_MAX_SIZE: "<<QUADTREE_MAX_SIZE<<std::endl;
 
     // copying initial values to GPU
     cudaMemcpy( masses_d, masses.data(), N_BODIES * sizeof(double), cudaMemcpyHostToDevice);
@@ -988,21 +962,6 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         // build the tree on cpu
         quadtree = buildTree(positions, masses);
 
-        // debug
-        std::cout<<"quadtree.size(): "<<quadtree.size()<<std::endl;
-
-
-        //debug
-        /*start = std::chrono::high_resolution_clock::now();
-        
-        cudaMalloc( (void**)&quadtree_d, quadtree.size() * sizeof(Quadrant));
-
-        //debug
-        end = std::chrono::high_resolution_clock::now();
-        duration_micro_alloc = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        alloc_duration += duration_micro_alloc.count();
-        std::cout<<"alloc_duration: "<<duration_micro_alloc.count()<<std::endl;
-        */
         // writing tree info in first and last iteration
         if (step == 0)
             TraverseTreeToFile(0, tree_file_init, positions);
@@ -1012,38 +971,14 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         // copy tree to gpu
         cudaMemcpy( quadtree_d, quadtree.data(), quadtree.size() * sizeof(Quadrant), cudaMemcpyHostToDevice);
 
-        // // calculate the quadtree size
+        // calculate the quadtree size
         int quadtreeMemSize = quadtree.size() * sizeof(Quadrant);
 
-        // // use shared memory if tree can fit in it
+        // use shared memory if tree can fit in it
         int sharedMemSize = quadtreeMemSize <= MAX_SHARED_MEM_PER_BLOCK_B ? quadtreeMemSize : 0;
-
-        std::cout<<"sharedMemSize: "<<(sharedMemSize > 0 ? " yes " : " no ")<<std::endl;
-
-        // //debug
-        // //sharedMemSize = 0;
-
-        // // defining blocksizes for global and shared memory cases
-        // int blockSize = 0;
-        // if (sharedMemSize == 0) {
-        //     blockSize = 32;
-        //     std::cout<<"shared memory NO"<<std::endl;
-        // } else {
-        //     blockSize = 64;
-        //     std::cout<<"shared memory YES"<<std::endl;
-        // }
-
-        // // defiining dimensions
-        // dim3 dimBlock(blockSize);
-        // // depends on N_THREADS for arbitrary number of threads approach
-        // dim3 dimGrid((N_THREADS + blockSize - 1) / blockSize);
-
-        //int registersUsed = 70;
 
         // calculate blocksize
         int blockSize = getOptimalBlockSize(FIRST_KERNEL_REGISTERS_NUM, sharedMemSize);
-
-        std::cout<<"optimal blocksize for computing forces: "<<blockSize<<std::endl;
         
         // defining dimensions
         dim3 dimBlock(blockSize);
@@ -1051,24 +986,14 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
         // depends on N_THREADS for arbitrary number of threads approach
         dim3 dimGrid((N_THREADS + blockSize - 1) / blockSize);
 
-        //if(step == 0 || step == N_SIMULATIONS - 1)
         start = std::chrono::high_resolution_clock::now();
 
         // pass quadtree memory size for dynamic allocation of shared memory
         computeForcesGpu<<<dimGrid, dimBlock, sharedMemSize>>>(positions_d, masses_d, forces_d, quadtree_d, quadtree.size(), sharedMemSize > 0);
         cudaDeviceSynchronize();
 
-        //debug
         end = std::chrono::high_resolution_clock::now();
         duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        //std::cout<<"force calculation in step: "<<step<<" lasted "<<duration_micro.count()<<" microseconds"<<std::endl;
-
-        // defining dimensions for rest of the calculation
-        //blockSize = 32;
-
-        // new
-
-        // registersUsed = 43;
         
         blockSize = getOptimalBlockSize(SECOND_KERNEL_REGISTERS_NUM);
 
@@ -1080,27 +1005,13 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
 
         updateAccVelPos<<<dimGrid, dimBlock>>>(forces_d, masses_d, accelerations_d, velocities_d, positions_d, DELTA_T);
         cudaDeviceSynchronize();
-        
-        //if(step == 0 || step == N_SIMULATIONS - 1) {
+
         end = std::chrono::high_resolution_clock::now();
         duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
         gpu_parallel_duration += duration_micro.count();
 
         // needed for next iterations's tree creation on cpu
         cudaMemcpy( positions.data(), positions_d, N_BODIES * N_DIM * sizeof(double), cudaMemcpyDeviceToHost);
-
-        //debug
-        /*start = std::chrono::high_resolution_clock::now();
-
-        // deallocate quadtree memory used in this iteration
-        cudaFree(quadtree_d);
-
-        //debug
-        end = std::chrono::high_resolution_clock::now();
-        duration_micro_alloc = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-        alloc_duration += duration_micro_alloc.count();
-        std::cout<<"alloc_duration: "<<duration_micro_alloc.count()<<std::endl;
-        */
     }
 
     // deallocation of GPU memory
@@ -1152,11 +1063,11 @@ int main() {
     // initialization
 
     //initializeCpu(masses, positions, velocities, false);
-    //initializeGpu(masses, positions, velocities);
+    initializeGpu(masses, positions, velocities);
 
     // load saved initialization values
-    loadSimulationDataFromText("masses_init.txt", "positions_init.txt", "velocities_init.txt",
-                                    N_BODIES, masses, positions, velocities);
+    //loadSimulationDataFromText("masses_init.txt", "positions_init.txt", "velocities_init.txt",
+    //                                N_BODIES, masses, positions, velocities);
 
     // cpu simulation run
 
@@ -1164,7 +1075,7 @@ int main() {
 
     auto start_cpu = std::chrono::high_resolution_clock::now();
 
-    runSimulationCpu(masses, positions_cpu, velocities);
+    //runSimulationCpu(masses, positions_cpu, velocities);
 
     auto end_cpu = std::chrono::high_resolution_clock::now();
     auto duration_cpu = std::chrono::duration_cast<std::chrono::milliseconds>(end_cpu - start_cpu);
@@ -1186,14 +1097,13 @@ int main() {
 
     std::cout<<std::endl<<std::endl;
 
-    std::cout << "CPU total computation took " << duration_cpu.count() << " milliseconds." << std::endl;
+    //std::cout << "CPU total computation took " << duration_cpu.count() << " milliseconds." << std::endl;
     std::cout << "GPU total computation took " << duration_gpu.count() << " milliseconds." << std::endl;
 
     std::cout<<std::endl<<std::endl;
 
-    std::cout << "CPU 'parallel' computation took " << cpu_parallel_duration << " microseconds." << std::endl;
+    //std::cout << "CPU 'parallel' computation took " << cpu_parallel_duration << " microseconds." << std::endl;
     std::cout << "GPU parallel computation took " << gpu_parallel_duration << " microseconds." << std::endl;
-    //std::cout << "alloc duration took " << alloc_duration << " microseconds." << std::endl;
 
     return 0;
 }
