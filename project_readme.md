@@ -9,9 +9,9 @@ Parameters:
 
 Initialization values:
 
-- To initialize values on CPU and store them into files, uncomment the line: 1065
-- To initialize values on GPU, uncomment the line: 1066
-- To load values from a file, uncomment the lines: 1069, 1070
+- To initialize values on CPU and store them into files, uncomment the line: 1061
+- To initialize values on GPU, uncomment the line: 1062
+- To load values from a file, uncomment the lines: 1065, 1066
 
 Execution:
 

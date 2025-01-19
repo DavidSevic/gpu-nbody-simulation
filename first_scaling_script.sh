@@ -27,10 +27,10 @@ for n_b in "${bodies[@]}"; do
                 echo "==============================================\n"
 
                 # Compile with specific n_bodies, n_threads, and n_simulations
-                nvcc -DN_BODIES=$n_b -DN_THREADS=$n_t -DN_SIMULATIONS=$n_s -o main main_approach_2.cu
+                nvcc -DN_BODIES=$n_b -DN_THREADS=$n_t -DN_SIMULATIONS=$n_s -o project project.cu
 
                 # Run the program and capture the runtime
-                runtime=$(./main)
+                runtime=$(./project)
 
                 # Save the result
                 echo "$n_b, $n_t, $n_s, $runtime" >> $output

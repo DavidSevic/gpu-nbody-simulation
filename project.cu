@@ -317,7 +317,6 @@ void initializeGpu(Masses& masses, Positions& positions, Positions& velocities) 
 
     dim3 dimBlock(blockSize);
 	dim3 dimGrid((N_THREADS + blockSize - 1) / blockSize);
-    //dim3 dimGrid((N_BODIES + blockSize - 1) / blockSize);
 
     curandState* states_d;
     cudaMalloc((void**)&states_d, N_BODIES * sizeof(curandState));
@@ -952,9 +951,6 @@ void runSimulationGpu(Masses masses, Positions& positions, Velocities velocities
     auto end = std::chrono::high_resolution_clock::now();
     auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(end - start);
     auto duration_micro = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    //debug
-    auto duration_micro_alloc = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
-    auto duration_force_computing = std::chrono::duration_cast<std::chrono::microseconds>(end - start);
 
     for (int step = 0; step < N_SIMULATIONS; ++step) {
         absolute_t += DELTA_T;
